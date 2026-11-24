@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pronos Foot</title>
+  <meta name="description" content="Pronostics football calculés automatiquement : Top 5, coupes d'Europe, sélections.">
+  <meta name="theme-color" content="#0f7b4b">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/style.css">
+  <script>
+    try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img src="assets/icon.svg" alt="" width="30" height="30">
+      <div>
+        <h1>Pronos Foot</h1>
+        <p id="updated" class="muted">Chargement…</p>
+      </div>
+    </div>
+    <button id="themeBtn" class="icon-btn" aria-label="Changer de thème" title="Mode clair / sombre">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button data-tab="matchs" class="active">Matchs</button>
+    <button data-tab="semaine">Semaine</button>
+    <button data-tab="weekend">Week-end</button>
+    <button data-tab="joueurs">Joueurs</button>
+    <button data-tab="classements">Classements</button>
+    <button data-tab="perf">Performance</button>
+  </nav>
+
+  <main id="view"></main>
+
+  <div id="modal" class="modal" hidden>
+    <div class="sheet" role="dialog" aria-modal="true">
+      <button class="close icon-btn" id="closeModal" aria-label="Fermer">✕</button>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+
+  <footer class="foot muted">
+    Probabilités calculées par un modèle statistique (Elo + loi de Poisson) mélangé aux cotes du marché.
+    Aucune garantie de gain : pariez de façon responsable. 18+ · Joueurs Info Service 09 74 75 13 13.
+  </footer>
+
+  <script src="assets/app.js" type="module"></script>
+</body>
+</html>

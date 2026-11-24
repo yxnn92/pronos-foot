@@ -1,0 +1,12 @@
+{
+  "name": "pronos-foot",
+  "private": true,
+  "type": "module",
+  "description": "Site perso de pronostics football, mis à jour automatiquement par GitHub",
+  "scripts": {
+    "update": "node scripts/update.mjs",
+    "start": "node scripts/serve.mjs",
+    "backtest": "node scripts/backtest.mjs"
+  },
+  "engines": { "node": ">=20" }
+}
