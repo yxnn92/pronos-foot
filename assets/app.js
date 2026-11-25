@@ -244,29 +244,178 @@ function renderSemaine() {
   view.innerHTML = html;
 }
 
-// ---------- onglet Week-end ----------
-function renderWeekend() {
-  let sat = todayKey(); while (weekday(sat) !== 6 && weekday(sat) !== 0) sat = addDays(sat, 1);
-  if (weekday(sat) === 0) sat = addDays(sat, -1);
-  const days = [sat, addDays(sat, 1)];
-  const ms = M.matches.filter((m) => days.includes(dayKey(m.date))), pre = ms.filter(isPre);
-  const best = pre.map((m) => ({ m, p: mainPick(m) })).filter((x) => x.p.stars >= 4).sort((a, b) => b.p.p - a.p.p);
-  const vals = pre.flatMap((m) => values(m).map((p) => ({ m, p }))).sort((a, b) => b.p.edge - a.p.edge);
-  const cs = combos(pre);
-  const line = ({ m, p }) => `<div class="mini" data-id="${m.id}" style="grid-template-columns:56px 1fr auto">
-      <div class="t">${fWd.format(new Date(m.date)).replace('.', '')}<br><span class="small muted">${fTime.format(new Date(m.date))}</span></div>
-      <div style="min-width:0"><div class="small muted" style="display:flex;gap:6px;align-items:center">${img(m.h.logo, 'logo', 'width:14px;height:14px')}${esc(m.h.short)} - ${esc(m.a.short)} · ${esc(comp(m.slug).short)}</div><b>${esc(p.label)}</b></div>
-      <div style="text-align:right">${p.type === 'Value' ? `<span class="tag value">${odd(p.odds)}</span>` : conf(p.stars)}<div class="small muted">${pct(p.p)}</div></div>
-    </div>`;
+// ---------- Combinés : paris disponibles pour chaque match ----------
+const LEAGUES = ['eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1'];
+const r2 = (x) => Math.round(x * 100) / 100;
+const estOdds = (p) => r2(Math.max(1.02, 0.94 / p)); // cote estimée (marge ≈ 6 %) quand le bookmaker ne la donne pas
+// Tous les paris qu'on peut mettre dans un combiné pour un match.
+function legFor(m, type, key) {
+  const p = m.pred, x = m.odds.x12, names = { h: m.h.short, a: m.a.short };
+  let prob, o = null, est = false, label;
+  if (type === '1N2') {
+    prob = p.p[key]; o = x?.[{ h: 0, d: 1, a: 2 }[key]] ?? null;
+    label = key === 'd' ? 'Match nul' : `Victoire ${names[key]}`;
+  } else if (type === 'DC') {
+    prob = p.dc[key]; label = { '1N': `${names.h} ou nul`, 'N2': `Nul ou ${names.a}`, '12': `${names.h} ou ${names.a}` }[key];
+    if (x) { const pr = { '1N': [x[0], x[1]], 'N2': [x[1], x[2]], '12': [x[0], x[2]] }[key]; o = r2(1 / (1 / pr[0] + 1 / pr[1])); est = true; }
+  } else if (type === 'Buts') {
+    const L = key.slice(1), over = key[0] === 'o';
+    prob = over ? p.goals[L] : 1 - p.goals[L];
+    label = `${over ? 'Plus' : 'Moins'} de ${L.replace('.', ',')} buts`;
+    if (m.odds.ou && String(m.odds.ou.line) === String(parseFloat(L))) o = over ? m.odds.ou.over : m.odds.ou.under;
+  } else if (type === 'BTTS') {
+    prob = key === 'yes' ? p.btts : 1 - p.btts; label = key === 'yes' ? 'Les deux équipes marquent' : 'Une équipe ne marque pas';
+  }
+  if (prob == null) return null;
+  if (!o) { o = estOdds(prob); est = true; }
+  return { id: `${m.id}|${type}|${key}`, mid: m.id, type, key, label, p: r2(prob * 100) / 100, odds: o, est, match: `${m.h.short} - ${m.a.short}`, date: m.date, slug: m.slug };
+}
+function allLegs(m) {
+  const out = [];
+  for (const k of ['h', 'd', 'a']) out.push(legFor(m, '1N2', k));
+  for (const k of ['1N', 'N2', '12']) out.push(legFor(m, 'DC', k));
+  for (const L of ['0.5', '1.5', '2.5', '3.5']) { out.push(legFor(m, 'Buts', 'o' + L)); out.push(legFor(m, 'Buts', 'u' + L)); }
+  out.push(legFor(m, 'BTTS', 'yes'), legFor(m, 'BTTS', 'no'));
+  return out.filter((l) => l && l.p >= 0.15 && l.p <= 0.97 && l.odds >= 1.05);
+}
+const legById = (id) => { const [mid, type, key] = id.split('|'); const m = M.matches.find((x) => x.id === mid); return m ? legFor(m, type, key) : null; };
+
+// ---------- Générateur : la meilleure combinaison pour une cote visée ----------
+// On cherche n paris (matchs différents) dont la cote totale est proche de la cible,
+// en gardant les paris les plus probables pour leur cote. Les vraies cotes sont préférées aux cotes estimées.
+function rng(seed) { let s = seed >>> 0 || 1; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+function generate(pool, n, target, seed = 1, exclude = null) {
+  const byMatch = new Map();
+  for (const m of pool) { const legs = allLegs(m).filter((l) => !exclude?.has(l.id)); if (legs.length) byMatch.set(m.id, legs); }
+  if (byMatch.size < n) return null;
+  const rand = rng(seed), mids = [...byMatch.keys()];
+  const legScore = (l) => Math.log(l.p * l.odds) - (l.est ? 0.04 : 0);
+  const score = (set) => { const lo = set.reduce((t, l) => t + Math.log(l.odds), 0); return set.reduce((t, l) => t + legScore(l), 0) - 2.5 * Math.abs(lo - Math.log(target)); };
+  const per = Math.pow(target, 1 / n);
+  // départ : pour chaque match, le pari le plus proche de la cote par pari visée
+  let cands = mids.map((id) => byMatch.get(id).reduce((b, l) => (Math.abs(Math.log(l.odds / per)) - legScore(l) < Math.abs(Math.log(b.odds / per)) - legScore(b) ? l : b)));
+  cands.sort((a, b) => (Math.abs(Math.log(a.odds / per)) - legScore(a)) - (Math.abs(Math.log(b.odds / per)) - legScore(b)) + (rand() - 0.5) * 0.15 * seed);
+  let set = cands.slice(0, n), best = score(set);
+  for (let it = 0; it < 1500; it++) {
+    const i = Math.floor(rand() * n), used = new Set(set.map((l) => l.mid));
+    const mid = rand() < 0.5 ? set[i].mid : mids[Math.floor(rand() * mids.length)];
+    if (mid !== set[i].mid && used.has(mid)) continue;
+    const legs = byMatch.get(mid), cand = legs[Math.floor(rand() * legs.length)];
+    const next = set.slice(); next[i] = cand;
+    const sc = score(next);
+    if (sc > best) { set = next; best = sc; }
+  }
+  set.sort((a, b) => a.date.localeCompare(b.date));
+  return { legs: set, odds: set.reduce((t, l) => t * l.odds, 1), p: set.reduce((t, l) => t * l.p, 1) };
+}
+
+// ---------- Mon combiné (gardé sur ce téléphone) ----------
+const MY_KEY = 'monCombine';
+let my = [];
+try { my = JSON.parse(localStorage.getItem(MY_KEY) || '[]'); } catch (e) { my = []; }
+const saveMy = () => { try { localStorage.setItem(MY_KEY, JSON.stringify(my)); } catch (e) {} updateMyCount(); };
+function updateMyCount() { const c = $('#myCount'); if (c) { c.hidden = !my.length; c.textContent = my.length; } }
+function addLeg(id, silent) {
+  if (my.find((l) => l.id === id)) { if (!silent) toast('Déjà dans ton combiné'); return; }
+  const l = legById(id); if (!l) return;
+  my.push({ id, odds: l.odds, est: l.est });
+  saveMy(); if (!silent) toast(`Ajouté : ${l.label}`);
+}
+function toast(msg) {
+  let t = $('#toast'); if (!t) { t = document.createElement('div'); t.id = 'toast'; t.className = 'toast'; document.body.appendChild(t); }
+  t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+// ---------- onglet Combinés ----------
+const cState = { scope: 'all', period: 7, n: 3, target: 4, seed: 1, mise: 10, seen: new Set(), last: null };
+const resetGen = () => { cState.seed = 1; cState.seen = new Set(); };
+const sliderToOdds = (v) => r2(1.5 * Math.pow(50 / 1.5, v / 100));
+const oddsToSlider = (o) => Math.round((100 * Math.log(o / 1.5)) / Math.log(50 / 1.5));
+function poolFor(scope, days) {
+  const lim = Date.now() + days * 864e5;
+  return M.matches.filter((m) => isPre(m) && Date.parse(m.date) < lim && Date.parse(m.date) > Date.now() + 5 * 60e3 &&
+    (scope === 'all' || (scope === 'ldc' && m.slug === 'uefa.champions') || (scope === 'euro' && /^uefa\.(champions|europa|europa\.conf)$/.test(m.slug)) || (scope === 'leagues' && LEAGUES.includes(m.slug)) || scope === m.slug));
+}
+function legRow(l, extra = '') {
+  const m = M.matches.find((x) => x.id === l.mid);
+  return `<div class="leg"><div style="min-width:0"><small>${m ? img(m.h.logo, 'logo', 'width:13px;height:13px;vertical-align:-2px') + ' ' : ''}${esc(l.match)} · ${fDayShort.format(new Date(l.date))} ${fTime.format(new Date(l.date))}</small><b>${esc(l.label)}</b> <span class="small muted">${pct(l.p)}</span></div>${extra || `<span class="o">${odd(l.odds)}${l.est ? '≈' : ''}</span>`}</div>`;
+}
+function genCard(c, title, sub, id) {
+  if (!c) return `<div class="card combo"><div class="eyebrow">${title}</div><div class="empty" style="padding:18px 0">Pas assez de matchs à venir pour ce combiné.</div></div>`;
+  return `<div class="card combo">
+    <div class="row-between"><div><div class="eyebrow">${title}</div><div class="combo-total">${odd(c.odds)}</div>${sub ? `<div class="small muted">${sub}</div>` : ''}</div>
+      <div class="ring" style="--p:${Math.round(c.p * 100)};background:conic-gradient(var(--accent) calc(var(--p)*1%),var(--surface-3) 0)"><span style="background:var(--surface);color:var(--text)">${pctN(c.p)}%</span></div></div>
+    <div class="combo-legs">${c.legs.map((l) => legRow(l)).join('')}</div>
+    <div class="row-between"><span class="small muted">Chances que tout passe : <b>${pct(c.p)}</b></span><button class="btn-sm" data-addall="${esc(c.legs.map((l) => l.id).join(','))}">+ Mon combiné</button></div>
+  </div>`;
+}
+function renderCombis() {
+  const ldcPool = poolFor('ldc', 7), euroPool = poolFor('euro', 7), lgPool = poolFor('leagues', 7);
+  const cupPool = ldcPool.length >= 2 ? ldcPool : euroPool, cupName = ldcPool.length >= 2 ? 'Ligue des champions' : "Coupes d'Europe";
+  const sugg = [
+    [cupName, 'Sûr', generate(cupPool, 2, 2, 3)], [cupName, 'Audacieux', generate(cupPool, 4, 8, 5)],
+    ['Championnats', 'Sûr', generate(lgPool, 3, 2.5, 7)], ['Championnats', 'Audacieux', generate(lgPool, 5, 12, 9)],
+  ];
+  const pool = poolFor(cState.scope, cState.period);
+  // « Autre proposition » : on écarte les paris déjà proposés (on repart de zéro quand il n'en reste plus assez)
+  let gen = generate(pool, cState.n, cState.target, cState.seed, cState.seen);
+  if (!gen && cState.seen.size) { cState.seen = new Set(); gen = generate(pool, cState.n, cState.target, cState.seed); }
+  cState.last = gen;
+  const scopes = [['all', 'Tout'], ['ldc', 'LDC'], ['euro', "Coupes d'Europe"], ['leagues', 'Championnats'], ...LEAGUES.map((s) => [s, comp(s).name])];
+  const myLegs = my.map((x) => ({ ...legById(x.id), ...x })).filter((l) => l.mid);
+  const myOdds = myLegs.reduce((t, l) => t * (Number(l.odds) || 1), 1), myP = myLegs.reduce((t, l) => t * (l.p || 0), 1);
+  const sameMatch = new Set(myLegs.map((l) => l.mid)).size < myLegs.length;
+  const legVerdict = (l) => { const m = M.matches.find((x) => x.id === l.mid); if (!m || m.hs == null || m.state === 'pre') return ''; const w = gradePick(l, m.hs, m.as); return m.completed ? (w ? '<span class="tag win">✓</span>' : '<span class="tag lose">✗</span>') : `<span class="tag ${w ? 'win' : 'lose'}">● ${m.hs}-${m.as}</span>`; };
+
   view.innerHTML = `
-    <h2>🏁 Pronos du week-end</h2>
-    <p class="note">${fDay.format(noon(days[0]))} et ${fDay.format(noon(days[1]))} · ${ms.length} matchs</p>
-    <h3>Les plus sûrs</h3>
-    <div class="card" style="overflow:hidden">${best.length ? best.slice(0, 12).map(line).join('') : '<div class="empty">Pas encore de prono très sûr. Les cotes du week-end arrivent souvent en milieu de semaine.</div>'}</div>
-    <h3>Value bets</h3>
-    <div class="card" style="overflow:hidden">${vals.length ? vals.slice(0, 10).map(line).join('') : '<div class="empty">Aucun value bet pour le moment.</div>'}</div>
-    ${cs.length ? `<h3>Combinés du week-end</h3><div class="grid2">${cs.map(comboHtml).join('')}</div>` : ''}
+    <h2>🎯 Combinés</h2>
+    <div class="card pad gen">
+      <div class="eyebrow">Générateur de combiné</div>
+      <div class="filters" style="margin-top:10px"><div class="chips">${scopes.map(([k, l]) => `<button class="chip ${cState.scope === k ? 'active' : ''}" data-scope="${k}">${l}</button>`).join('')}</div></div>
+      <div class="segmented" style="margin:4px 0 12px">${[[1, "Aujourd'hui"], [2, '48 h'], [7, '7 jours']].map(([d, l]) => `<button class="${cState.period === d ? 'active' : ''}" data-period="${d}">${l}</button>`).join('')}</div>
+      <div class="gen-ctrls">
+        <div class="ctrl"><label>Cote visée <b id="tVal">${odd(cState.target)}</b></label>
+          <input type="range" id="tRange" min="0" max="100" value="${oddsToSlider(cState.target)}"><div class="range-ends"><span>1,50</span><span>50</span></div></div>
+        <div class="ctrl"><label>Nombre de paris</label>
+          <div class="stepper"><button data-step="-1" aria-label="Moins">−</button><b>${cState.n}</b><button data-step="1" aria-label="Plus">+</button></div></div>
+      </div>
+      ${gen ? `<div class="gen-res"><div class="row-between"><div><div class="small muted">Cote obtenue</div><div class="combo-total">${odd(gen.odds)}</div></div>
+          <div class="ring" style="--p:${Math.round(gen.p * 100)};background:conic-gradient(var(--accent) calc(var(--p)*1%),var(--surface-3) 0)"><span style="background:var(--surface);color:var(--text)">${pctN(gen.p)}%</span></div></div>
+        <div class="combo-legs">${gen.legs.map((l) => legRow(l)).join('')}</div>
+        <div class="row-between"><button class="btn-sm ghost" id="reroll">↻ Autre proposition</button><button class="btn-sm" data-addall="${esc(gen.legs.map((l) => l.id).join(','))}">+ Mon combiné</button></div></div>`
+        : `<div class="empty">Pas assez de matchs (${pool.length}) pour ${cState.n} paris. Élargis la période ou la compétition.</div>`}
+      <p class="note">Le générateur prend un pari par match et cherche les paris les plus probables pour atteindre la cote visée. Cotes ≈ : estimées (pas de cote bookmaker disponible pour ce pari).</p>
+    </div>
+
+    <h2>📝 Mon combiné ${myLegs.length ? `<span class="tag">${myLegs.length} pari${myLegs.length > 1 ? 's' : ''}</span>` : ''}</h2>
+    <div class="card pad">
+      ${myLegs.length ? `<div class="combo-legs" style="margin-top:0">${myLegs.map((l) => legRow(l, `<div class="my-ctl">${legVerdict(l)}<input class="odd-in" type="number" step="0.01" min="1.01" inputmode="decimal" value="${r2(l.odds)}" data-odds="${esc(l.id)}" title="Mets ici ta cote Betclic si tu veux"><button class="x" data-del="${esc(l.id)}" aria-label="Retirer">✕</button></div>`)).join('')}</div>
+        ${sameMatch ? '<p class="note">⚠️ Plusieurs paris sur le même match : les bookmakers les refusent souvent dans un combiné.</p>' : ''}
+        <div class="my-sum">
+          <div><div class="small muted">Cote totale</div><div class="combo-total">${odd(myOdds)}</div></div>
+          <div><div class="small muted">Chances (modèle)</div><div class="combo-total" style="font-size:20px">${pct(myP)}</div></div>
+          <div><div class="small muted">Mise</div><input type="number" id="mise" min="0" step="1" value="${cState.mise}" inputmode="decimal"> €</div>
+          <div><div class="small muted">Gain possible</div><div class="combo-total" style="font-size:20px">${(cState.mise * myOdds).toFixed(2).replace('.', ',')} €</div></div>
+        </div>
+        <div class="row-between" style="margin-top:12px"><span class="note" style="margin:0">Tu peux remplacer chaque cote par celle de Betclic.</span><button class="btn-sm ghost" id="clearMy">Vider</button></div>`
+        : '<div class="empty" style="padding:20px 0">Ton combiné est vide.<br>Ajoute des paris avec <b>+ Mon combiné</b>, ou depuis la fiche d\'un match (onglet Pronos).</div>'}
+    </div>
+
+    <h2>💡 Combinés proposés</h2>
+    <div class="grid2">${sugg.map(([t, s, c], i) => genCard(c, `${t} · ${s}`, s === 'Sûr' ? 'Cote visée ≈ 2' : 'Cote visée plus haute', i)).join('')}</div>
   `;
+  view.querySelectorAll('[data-scope]').forEach((b) => b.onclick = () => { cState.scope = b.dataset.scope; resetGen(); render(); });
+  view.querySelectorAll('[data-period]').forEach((b) => b.onclick = () => { cState.period = +b.dataset.period; resetGen(); render(); });
+  view.querySelectorAll('[data-step]').forEach((b) => b.onclick = () => { cState.n = Math.min(10, Math.max(2, cState.n + +b.dataset.step)); resetGen(); render(); });
+  const tr = $('#tRange');
+  tr.oninput = () => { $('#tVal').textContent = odd(sliderToOdds(+tr.value)); };
+  tr.onchange = () => { cState.target = sliderToOdds(+tr.value); resetGen(); render(); };
+  $('#reroll')?.addEventListener('click', () => { for (const l of cState.last?.legs || []) cState.seen.add(l.id); cState.seed++; render(); });
+  view.querySelectorAll('[data-addall]').forEach((b) => b.onclick = () => { const ids = b.dataset.addall.split(','); ids.forEach((id) => addLeg(id, true)); toast(`${ids.length} paris ajoutés à ton combiné`); render(); });
+  view.querySelectorAll('[data-del]').forEach((b) => b.onclick = () => { my = my.filter((l) => l.id !== b.dataset.del); saveMy(); render(); });
+  view.querySelectorAll('[data-odds]').forEach((inp) => inp.onchange = () => { const l = my.find((x) => x.id === inp.dataset.odds); const v = parseFloat(String(inp.value).replace(',', '.')); if (l && v > 1) { l.odds = v; l.est = false; saveMy(); render(); } });
+  $('#mise')?.addEventListener('change', (e) => { cState.mise = Math.max(0, parseFloat(e.target.value) || 0); render(); });
+  $('#clearMy')?.addEventListener('click', () => { my = []; saveMy(); render(); });
 }
 
 // ---------- onglet Joueurs ----------
@@ -406,10 +555,15 @@ const mkRow = (label, p, o, extra = '', color = '') => `<div class="mk-row"><div
 function fichePronos(m) {
   const p = m.pred, o = m.odds.x12, mv = oddsMove(m), g = p.goals, tg = p.teamGoals;
   const arrow = (i) => { const x = mv?.[i]; if (!x || Math.abs(x.diff) < 0.03) return ''; return ` <span class="${x.diff < 0 ? 'down' : 'up'} small">${x.diff < 0 ? '↘' : '↗'} ${odd(x.from)}</span>`; };
+  const pickId = (x) => `${m.id}|${x.type === 'Value' ? (/^[ou]\d/.test(x.key) ? 'Buts' : '1N2') : x.type}|${x.key}`;
+  const addBtn = (id) => (m.state === 'pre' ? `<button class="add" data-add="${esc(id)}" aria-label="Ajouter à mon combiné" title="Ajouter à mon combiné">+</button>` : '');
   const pickLine = (x) => `<div class="pick-card"><div><div class="k">${TYPE_NAMES[x.type]}</div><b>${esc(x.label)}</b>${x.edge ? ` <span class="tag value">+${Math.round(x.edge * 100)} %</span>` : ''}</div>
-    <div style="text-align:right">${conf(x.stars)}<div class="small" style="margin-top:3px"><b>${pct(x.p)}</b>${x.odds ? ' · ' + odd(x.odds) + (x.est ? '≈' : '') : ''}</div>${verdictTag(verdict(m, x))}</div></div>`;
+    <div style="display:flex;align-items:center;gap:10px"><div style="text-align:right">${conf(x.stars)}<div class="small" style="margin-top:3px"><b>${pct(x.p)}</b>${x.odds ? ' · ' + odd(x.odds) + (x.est ? '≈' : '') : ''}</div>${verdictTag(verdict(m, x))}</div>${addBtn(pickId(x))}</div></div>`;
+  const legs = m.state === 'pre' ? allLegs(m) : [];
   return `
     <div class="card pad section"><div class="eyebrow">Nos pronos</div>${m.picks.map(pickLine).join('')}</div>
+    ${legs.length ? `<div class="card pad section"><div class="row-between"><div class="eyebrow">Ajouter à mon combiné</div><span class="small muted">Tous les paris du match</span></div>
+      <div class="leg-grid">${legs.map((l) => `<button class="leg-btn" data-add="${esc(l.id)}"><span>${esc(l.label)}</span><b>${odd(l.odds)}${l.est ? '≈' : ''}</b></button>`).join('')}</div></div>` : ''}
     <div class="card pad section"><h3 style="margin-top:0">Résultat 1N2</h3>
       <div class="mk">${mkRow(esc(m.h.short), p.p.h, o?.[0], arrow(0), 'var(--home)')}${mkRow('Match nul', p.p.d, o?.[1], arrow(1), 'var(--draw)')}${mkRow(esc(m.a.short), p.p.a, o?.[2], arrow(2), 'var(--away)')}</div>
       ${p.market ? `<p class="note">Modèle seul : ${pct(p.model.h)} / ${pct(p.model.d)} / ${pct(p.model.a)} · Bookmakers : ${pct(p.market.h)} / ${pct(p.market.d)} / ${pct(p.market.a)}${m.odds.src ? ` (${m.odds.src})` : ''}</p>` : '<p class="note">Pas encore de cotes : probabilités du modèle seul.</p>'}
@@ -554,11 +708,13 @@ document.addEventListener('visibilitychange', () => {
 function render() {
   if (!M) return;
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === state.tab));
-  ({ matchs: renderMatchs, semaine: renderSemaine, weekend: renderWeekend, joueurs: renderJoueurs, classements: renderClassements, perf: renderPerf })[state.tab]();
+  ({ matchs: renderMatchs, semaine: renderSemaine, combis: renderCombis, joueurs: renderJoueurs, classements: renderClassements, perf: renderPerf })[state.tab]();
+  updateMyCount();
 }
 $('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; state.tab = b.dataset.tab; render(); window.scrollTo({ top: 0 }); };
 view.addEventListener('click', (e) => { const c = e.target.closest('[data-id]'); if (c && !e.target.closest('input,select,button,label')) openMatch(c.dataset.id); });
 $('#closeModal').onclick = closeModal;
+$('#modalBody').addEventListener('click', (e) => { const b = e.target.closest('[data-add]'); if (b) { addLeg(b.dataset.add); b.classList.add('added'); } });
 $('#modal').onclick = (e) => { if (e.target.id === 'modal') closeModal(); };
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 $('#themeBtn').onclick = () => {
