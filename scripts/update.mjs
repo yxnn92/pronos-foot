@@ -202,7 +202,50 @@ function scorerOdds(name, scorers) {
   return hit || null;
 }
 
-function players(teamId, lambda, leaders, lineup, teamStats, scorers) {
+// ---------- 4 bis. blessés et suspendus ----------
+// Premier League : API officielle du jeu Fantasy Premier League (gratuite, publique).
+async function loadFpl() {
+  const j = await getJSON('https://fantasy.premierleague.com/api/bootstrap-static/');
+  if (!j?.elements) { log('FPL indisponible'); return []; }
+  const teams = new Map(j.teams.map((t) => [t.id, t.name]));
+  const kinds = { i: 'blessé', d: 'incertain', s: 'suspendu' };
+  const out = j.elements.filter((p) => kinds[p.status]).map((p) => ({
+    team: teams.get(p.team), name: `${p.first_name} ${p.second_name}`, alt: p.web_name, kind: kinds[p.status],
+    chance: p.chance_of_playing_next_round, info: frNews(p.news || ''), src: 'Fantasy Premier League',
+  }));
+  log('FPL : joueurs absents ou incertains', out.length);
+  return out;
+}
+// Traduction des infos FPL (anglais) en français
+const MONTHS = { Jan: 'janv.', Feb: 'févr.', Mar: 'mars', Apr: 'avr.', May: 'mai', Jun: 'juin', Jul: 'juil.', Aug: 'août', Sep: 'sept.', Oct: 'oct.', Nov: 'nov.', Dec: 'déc.' };
+const BODY = { knee: 'genou', calf: 'mollet', hamstring: 'ischio-jambiers', thigh: 'cuisse', ankle: 'cheville', foot: 'pied', groin: 'aine', shoulder: 'épaule', back: 'dos', achilles: "tendon d'Achille", hip: 'hanche', muscle: 'musculaire', head: 'tête', knock: 'coup', hand: 'main', wrist: 'poignet', toe: 'orteil', rib: 'côtes', neck: 'cou', leg: 'jambe', heel: 'talon', abdominal: 'abdominaux', quad: 'quadriceps', adductor: 'adducteurs', arm: 'bras', chest: 'poitrine', face: 'visage', concussion: 'commotion', muscular: 'musculaire', unspecified: 'non précisée', foot_: 'pied' };
+function frNews(t) {
+  return t
+    .replace(/(\w+) injury/gi, (m, b) => (BODY[b.toLowerCase()] ? `blessure (${BODY[b.toLowerCase()]})` : `blessure (${b})`))
+    .replace(/Knock/gi, 'coup').replace(/Illness/gi, 'malade').replace(/Suspended until/gi, 'suspendu jusqu\'au').replace(/Suspended/gi, 'suspendu')
+    .replace(/Expected back (\d+) (\w{3})/gi, (m, d, mo) => `retour prévu le ${d} ${MONTHS[mo] || mo}`)
+    .replace(/Unknown return date/gi, 'date de retour inconnue')
+    .replace(/(\d+)% chance of playing/gi, '$1 % de chances de jouer')
+    .replace(/Has joined (.+?) permanently/gi, 'a rejoint $1').replace(/on loan/gi, 'en prêt').replace(/International duty/gi, 'en sélection')
+    .replace(/Lack of match fitness/gi, 'manque de rythme').replace(/Personal reasons/gi, 'raisons personnelles');
+}
+const TEAM_ALIAS = { spurs: 'tottenham', nottmforest: 'nottingham', manutd: 'manchesterunited', mancity: 'manchestercity', wolves: 'wolverhampton', sheffieldutd: 'sheffieldunited' };
+function sameTeam(fplName, t) {
+  const n = norm(fplName), a = TEAM_ALIAS[n] || n;
+  return [norm(t.name), norm(t.short)].some((c) => c && (c === n || c.includes(a) || a.includes(c)));
+}
+const samePlayer = (name, abs) => {
+  const n = norm(name), last = norm(name.split(' ').slice(-1)[0]);
+  return norm(abs.name) === n || norm(abs.alt || '') === n || (last.length > 3 && (norm(abs.name).endsWith(last) || norm(abs.alt || '') === last));
+};
+// Cartons rouges : lus dans les temps forts ESPN du dernier match de l'équipe dans la même compétition.
+function redCards(summary) {
+  return (summary?.keyEvents || []).filter((k) => /red-card/.test(k.type?.type || '')) // rouge direct ou 2e jaune
+    .map((k) => ({ team: k.team?.id, name: k.participants?.[0]?.athlete?.displayName, clock: k.clock?.displayValue }))
+    .filter((x) => x.team && x.name);
+}
+
+function players(teamId, lambda, leaders, lineup, teamStats, scorers, absents = []) {
   const L = leaders?.[teamId];
   if (!L) return [];
   // Rythme habituel de l'équipe dans la compétition → on ajuste selon les buts attendus ce match-ci.
@@ -220,6 +263,12 @@ function players(teamId, lambda, leaders, lineup, teamStats, scorers) {
   const out = [];
   for (const p of map.values()) {
     let status = 'probable', f = 1;
+    const abs = absents.find((a) => samePlayer(p.name, a));
+    if (abs) {
+      if (abs.kind === 'incertain') { status = 'incertain'; f = abs.chance != null ? abs.chance / 100 : 0.5; }
+      else { status = 'absent'; f = 0; }
+      p.absInfo = `${abs.kind}${abs.info ? ' · ' + abs.info : ''}`;
+    }
     if (xi?.length) {
       if (xi.includes(p.id)) status = 'titulaire';
       else if (subs?.includes(p.id)) { status = 'remplaçant'; f = 0.3; }
@@ -336,11 +385,40 @@ async function main() {
   for (const id of Object.keys(sumCache)) if (!window.find((e) => e.id === id)) delete sumCache[id];
   await writeJSON(path.join(CACHE, 'summaries.json'), sumCache);
 
+  // Blessés / suspendus
+  const fpl = window.some((e) => e.slug === 'eng.1' && e.state === 'pre') ? await loadFpl() : [];
+  const cards = await readJSON(path.join(CACHE, 'cards.json'), {});
+  const lastMatch = (e, t) => results.filter((r) => r.slug === e.slug && (r.h.id === t || r.a.id === t) && r.date < e.date)
+    .sort((a, b) => b.date.localeCompare(a.date))[0];
+  const needCards = new Map();
+  for (const e of window) if (e.state === 'pre' && Date.parse(e.date) - NOW < 6 * D) for (const t of [e.h.id, e.a.id]) {
+    const l = lastMatch(e, t); if (l && !(l.id in cards)) needCards.set(l.id, l);
+  }
+  await pool([...needCards.values()], 4, async (l) => {
+    const s = await getJSON(`${SITE}/${l.slug}/summary?event=${l.id}`);
+    if (s) cards[l.id] = redCards(s);
+  });
+  await writeJSON(path.join(CACHE, 'cards.json'), cards);
+  log('cartons rouges vérifiés sur', needCards.size, 'nouveaux matchs');
+  const dFr = (d) => new Date(d).toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris', day: '2-digit', month: '2-digit' });
+  function absentsFor(e, side) {
+    const t = e[side], out = [];
+    if (e.state !== 'pre') return out;
+    const l = lastMatch(e, t.id);
+    for (const c of (l && cards[l.id]) || []) if (c.team === t.id) {
+      const opp = l.h.id === t.id ? l.a.short : l.h.short;
+      out.push({ name: c.name, kind: 'suspendu', info: `carton rouge le ${dFr(l.date)} contre ${opp} (suspension probable)`, src: 'ESPN' });
+    }
+    if (e.slug === 'eng.1') for (const a of fpl) if (sameTeam(a.team, t) && !out.some((x) => samePlayer(x.name, a))) out.push(a);
+    return out;
+  }
+
   // Historique des pronos
   const history = await readJSON(path.join(DATA, 'history.json'), {});
 
   const matches = window.map((e) => {
     const sum = sumCache[e.id] || { odds: {}, form: {}, leaders: {}, lineup: {} };
+    const absents = { h: absentsFor(e, 'h'), a: absentsFor(e, 'a') };
     // Cotes du marché (Bet365 / DraftKings, sites étrangers) → cotes « France » estimées,
     // plus basses car les bookmakers français reversent moins (≈ 91 % au lieu de ≈ 94 %).
     const x12 = sum.odds.b365 || sum.odds.dk || null;
@@ -384,8 +462,10 @@ async function main() {
       form: { h: sum.form[e.h.id] || [], a: sum.form[e.a.id] || [] },
       stats: { h: sh || null, a: sa || null },
       h2h, lineup: { h: sum.lineup[e.h.id] || null, a: sum.lineup[e.a.id] || null },
-      players: { h: players(e.h.id, pr.xg[0], sum.leaders, sum.lineup, sh, sum.scorers), a: players(e.a.id, pr.xg[1], sum.leaders, sum.lineup, sa, sum.scorers) },
-      scorers: (sum.scorers || []).slice(0, 20),
+      players: { h: players(e.h.id, pr.xg[0], sum.leaders, sum.lineup, sh, sum.scorers, absents.h), a: players(e.a.id, pr.xg[1], sum.leaders, sum.lineup, sa, sum.scorers, absents.a) },
+      absents,
+      // cotes buteur : estimation France (o) + cote Bet365 d'origine (raw)
+      scorers: (sum.scorers || []).slice(0, 20).map((s) => ({ name: s.name, o: frScorer(s.o), first: s.first ? frScorer(s.first) : null, raw: s.o })),
       result: hist?.result || null, graded: hist?.result ? hist.picks : null,
     };
   });

@@ -67,6 +67,19 @@ function verdict(m, p) {
 const verdictTag = (v) => !v ? '' : v.final ? (v.win ? '<span class="tag win">✓ Gagné</span>' : '<span class="tag lose">✗ Perdu</span>')
   : (v.win ? '<span class="tag win">● passe pour l\'instant</span>' : '<span class="tag lose">● ne passe pas pour l\'instant</span>');
 
+// ---------- blessés / suspendus ----------
+const absCount = (m) => (m.absents?.h?.length || 0) + (m.absents?.a?.length || 0);
+const KIND_TAG = { 'blessé': 'lose', 'suspendu': 'lose', 'incertain': 'big' };
+function absentsHtml(m) {
+  if (!m.absents || m.state !== 'pre') return '';
+  const side = (t, list) => `<div style="margin:8px 0 4px"><b style="display:flex;gap:8px;align-items:center">${img(t.logo, 'logo', 'width:18px;height:18px')}${esc(t.short)}</b></div>` +
+    (list.length ? list.map((a) => `<div class="abs-row"><span class="tag ${KIND_TAG[a.kind] || ''}">${esc(a.kind)}${a.kind === 'incertain' && a.chance != null ? ' ' + a.chance + ' %' : ''}</span><div><b>${esc(a.name)}</b><div class="small muted">${esc(a.info || '')}</div></div></div>`).join('')
+      : '<div class="small muted">Aucun absent connu.</div>');
+  const pl = m.slug === 'eng.1';
+  return `<div class="card pad section"><h3 style="margin-top:0">🚑 Blessés et suspendus</h3>${side(m.h, m.absents.h)}${side(m.a, m.absents.a)}
+    <p class="note">${pl ? 'Premier League : blessés, incertains et suspendus selon Fantasy Premier League (officiel). ' : 'Hors Premier League, aucune source gratuite ne donne les blessés : seuls les suspendus après un carton rouge au dernier match sont détectés. '}Les compos officielles (≈1 h avant) confirment les absents.</p></div>`;
+}
+
 // ---------- helpers matchs ----------
 const isPre = (m) => m.state === 'pre';
 const mainPick = (m) => m.picks.find((p) => p.type === '1N2');
@@ -110,7 +123,7 @@ function matchCard(m) {
       <span class="pick">${esc(mp.label)}${mp.odds ? ` <span class="odd">${odd(mp.odds)}</span>` : ''}</span>${conf(mp.stars)}
       ${vs.length ? `<span class="tag value">◆ ${vs.length} value</span>` : ''}
       ${moved ? `<span class="tag ${moved.diff < 0 ? 'down' : 'up'}" title="Évolution de la cote">${moved.diff < 0 ? '↘' : '↗'} ${odd(moved.from)} → ${odd(moved.to)}</span>` : ''}
-      ${bigMatch(m) ? '<span class="tag big">🔥 Choc</span>' : ''}
+      ${bigMatch(m) ? '<span class="tag big">🔥 Choc</span>' : ''}${absCount(m) ? `<span class="tag lose" title="Blessés / suspendus">🚑 ${absCount(m)}</span>` : ''}
       ${verdictTag(v)}
       ${m.result?.void ? `<span class="tag">${esc(m.result.note)}</span>` : ''}
     </div>
@@ -252,7 +265,7 @@ const PLAYER_TYPES = {
   Assist: { field: 'pa', label: 'passeur décisif', name: 'Passeur' },
   Decisive: { field: 'pd', label: 'décisif (but ou passe)', name: 'Décisif' },
 };
-const estOdds = (p) => r2(Math.max(1.02, 0.94 / p)); // cote estimée (marge ≈ 6 %) quand le bookmaker ne la donne pas
+const estOdds = (p) => r2(Math.max(1.02, 0.91 / p)); // cote estimée au taux de retour français (≈ 91 %) quand le bookmaker ne la donne pas
 // Tous les paris qu'on peut mettre dans un combiné pour un match.
 function legFor(m, type, key) {
   const p = m.pred, x = m.odds.x12, names = { h: m.h.short, a: m.a.short };
@@ -474,7 +487,7 @@ function renderJoueurs() {
     <div class="card" style="overflow:hidden">
       <div class="player headrow"><span>Joueur</span><span class="${state.pSort === 'pg' ? 'sort-active' : ''}">But</span><span class="${state.pSort === 'pa' ? 'sort-active' : ''}">Passe</span><span class="${state.pSort === 'pd' ? 'sort-active' : ''}">Décisif</span><span>Cote</span></div>
       ${rows.slice(0, 60).map((r) => `<div class="player mc" data-id="${r.match.id}" style="border-radius:0;box-shadow:none;border-width:0 0 1px">
-        <div class="pn"><b>${esc(r.name)}</b> ${r.status === 'titulaire' ? '<span class="tag win">Titulaire</span>' : r.status === 'remplaçant' ? '<span class="tag">Remplaçant</span>' : ''}
+        <div class="pn"><b>${esc(r.name)}</b> ${r.status === 'titulaire' ? '<span class="tag win">Titulaire</span>' : r.status === 'remplaçant' ? '<span class="tag">Remplaçant</span>' : r.status === 'incertain' ? `<span class="tag big" title="${esc(r.absInfo || '')}">Incertain</span>` : ''}
         <small>${img(r.team.logo, 'logo', 'width:13px;height:13px;vertical-align:-2px')} ${esc(r.team.short)} vs ${esc(r.opp.short)} · ${r.g} b. ${r.a} p. en ${esc(comp(r.match.slug).short)}</small></div>
         <span class="v">${pct(r.pg)}</span><span class="v">${pct(r.pa)}</span><span class="v">${pct(r.pd)}</span>${oddCell(r)}
       </div>`).join('') || `<div class="empty">${state.pValue ? 'Aucun value buteur pour le moment.' : 'Pas de données joueurs pour le moment.'}</div>`}
@@ -623,11 +636,12 @@ function formHtml(list) {
   return `<div class="form">${list.slice(0, 5).map((e) => `<b class="${e.res}" title="${esc(e.ha === 'dom' ? 'vs' : '@')} ${esc(e.opp)} ${esc(e.score)} (${esc(e.comp)})">${{ W: 'V', D: 'N', L: 'D' }[e.res] || '?'}</b>`).join('')}</div>`;
 }
 function ficheStats(m) {
+  const absBlock = absentsHtml(m);
   const s = m.stats;
   const rank = (id) => { const t = S.tables.find((x) => x.slug === m.slug); for (const g of t?.groups || []) { const r = g.rows.find((x) => x.id === id); if (r) return r; } return null; };
   const rh = rank(m.h.id), ra = rank(m.a.id);
   const avg = (a, b) => (b ? (a / b).toFixed(2).replace('.', ',') : '–');
-  return `
+  return absBlock + `
     <div class="card pad section"><h3 style="margin-top:0">Forme (5 derniers matchs)</h3>
       <div class="row-between" style="margin:8px 0"><span style="display:flex;gap:8px;align-items:center;font-weight:600">${img(m.h.logo, 'logo', 'width:20px;height:20px')}${esc(m.h.short)}</span>${formHtml(m.form.h)}</div>
       <div class="row-between" style="margin:8px 0"><span style="display:flex;gap:8px;align-items:center;font-weight:600">${img(m.a.logo, 'logo', 'width:20px;height:20px')}${esc(m.a.short)}</span>${formHtml(m.form.a)}</div>
@@ -676,17 +690,17 @@ function ficheCompos(m) {
   }
   const absents = ['h', 'a'].flatMap((s) => m.players[s].filter((p) => p.status === 'absent').map((p) => ({ ...p, t: m[s] })));
   return side(m.h, m.lineup.h) + side(m.a, m.lineup.a) +
-    `<div class="card pad section"><h3 style="margin-top:0">🚑 Joueurs clés absents</h3>${absents.length ? absents.map((p) => `<div style="padding:3px 0">${esc(p.name)} <span class="muted small">(${esc(p.t.short)} · ${p.g} buts, ${p.a} passes)</span></div>`).join('') : '<span class="muted small">Aucun buteur ou passeur important absent de la feuille de match.</span>'}
-    <p class="note">ESPN ne fournit pas la liste des blessés : on signale les meilleurs buteurs et passeurs absents de la feuille de match.</p></div>`;
+    `${absentsHtml(m)}<div class="card pad section"><h3 style="margin-top:0">Buteurs / passeurs absents de la feuille de match</h3>${absents.length ? absents.map((p) => `<div style="padding:3px 0">${esc(p.name)} <span class="muted small">(${esc(p.t.short)} · ${p.g} buts, ${p.a} passes)</span></div>`).join('') : '<span class="muted small">Aucun buteur ou passeur important absent de la feuille de match.</span>'}
+    </div>`;
 }
 function fichePlayers(m) {
   const list = (t, arr) => `<div class="card section" style="overflow:hidden"><div class="list-head">${img(t.logo, '')}${esc(t.short)}</div>
     <div class="player headrow"><span>Joueur</span><span>But</span><span>Passe</span><span>Décisif</span><span>Cote</span></div>
     ${arr.length ? arr.slice(0, 8).map((p) => `<div class="player"><div class="pn"><b>${esc(p.name)}</b> ${p.status !== 'probable' ? `<span class="tag ${p.status === 'titulaire' ? 'win' : p.status === 'absent' ? 'lose' : ''}">${p.status}</span>` : ''}<small>${p.g} but${p.g > 1 ? 's' : ''} · ${p.a} passe${p.a > 1 ? 's' : ''} · ${p.m ?? '?'} matchs</small></div><span class="v">${pct(p.pg)}</span><span class="v">${pct(p.pa)}</span><span class="v">${pct(p.pd)}</span>${oddCell(p)}</div>`).join('') : '<div class="empty">Pas de données joueurs.</div>'}</div>`;
   const sc = m.scorers || [];
-  const odds = sc.length ? `<div class="card pad section"><h3 style="margin-top:0">Cotes buteur</h3><p class="note" style="margin-top:0">Cotes Bet365 (site étranger). Les books français sont souvent ≈ 15 % plus bas sur les buteurs.</p>
+  const odds = sc.length ? `<div class="card pad section"><h3 style="margin-top:0">Cotes buteur</h3><p class="note" style="margin-top:0">Estimation France (≈ Betclic), d'après les cotes Bet365.</p>
     <div class="scorers"><span class="mk-head">Joueur</span><span class="mk-head" style="text-align:right">À tout moment</span><span class="mk-head" style="text-align:right">1er buteur</span><span class="mk-head" style="text-align:right">Chances</span>
-    ${sc.map((s) => `<span>${esc(s.name)}</span><b style="text-align:right">${odd(s.o)}</b><span class="muted" style="text-align:right">${s.first ? odd(s.first) : '–'}</span><span class="muted" style="text-align:right">${pct(Math.min(0.95, 0.85 / s.o))}</span>`).join('')}</div>
+    ${sc.map((s) => `<span>${esc(s.name)}</span><b style="text-align:right">${odd(s.o)}</b><span class="muted" style="text-align:right">${s.first ? odd(s.first) : '–'}</span><span class="muted" style="text-align:right">${pct(Math.min(0.95, 0.85 / (s.raw || s.o)))}</span>`).join('')}</div>
     <p class="note">Chances = ce que la cote représente, sans la marge du bookmaker (≈15 %).</p></div>` : '<p class="note">Pas encore de cotes buteur pour ce match.</p>';
   const pLegs = m.state === 'pre' ? playerLegs(m) : [];
   const adds = pLegs.length ? `<div class="card pad section"><div class="row-between"><div class="eyebrow">Ajouter un pari joueur à mon combiné</div></div>

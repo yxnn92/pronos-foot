@@ -382,3 +382,8 @@ input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border-radius: 
 @keyframes spin { to { transform: rotate(360deg); } }
 .flash { animation: flash 1.2s; }
 @keyframes flash { 0% { background: color-mix(in srgb, var(--gold) 35%, transparent); } }
+
+/* Blessés / suspendus */
+.abs-row { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.abs-row:last-child { border-bottom: 0; }
+.abs-row .tag { min-width: 78px; justify-content: center; text-transform: capitalize; }
