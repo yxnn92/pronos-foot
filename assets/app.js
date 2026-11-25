@@ -24,7 +24,7 @@ const pctN = (p) => (p == null ? '–' : Math.round(p * 100));
 const odd = (o) => (o ? Number(o).toFixed(2).replace('.', ',') : '');
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const img = (src, cls = 'logo', style = '') => (src ? `<img class="${cls}" src="${esc(src)}" alt="" loading="lazy" style="${style}" onerror="this.style.visibility='hidden'">` : `<span class="${cls}"></span>`);
-const conf = (n) => `<span class="conf" title="Confiance ${n}/5">${[1, 2, 3, 4, 5].map((i) => `<i class="${i <= n ? 'on' : ''}"></i>`).join('')}</span>`;
+const conf = (n) => `<span class="conf c${n}" title="Confiance ${n}/5">${[1, 2, 3, 4, 5].map((i) => `<i class="${i <= n ? 'on' : ''}"></i>`).join('')}</span>`;
 const comp = (slug) => M?.comps?.[slug] || S?.comps?.[slug] || { name: slug, short: slug };
 const TYPE_NAMES = { '1N2': 'Résultat', DC: 'Double chance', Buts: 'Buts', BTTS: 'Les deux marquent', Value: 'Value bet' };
 // Statuts ESPN (anglais) → français

@@ -134,6 +134,12 @@ main { max-width: 1040px; margin: 0 auto; padding: 8px 16px 28px; }
 .conf i { width: 4px; border-radius: 2px; background: var(--surface-3); }
 .conf i:nth-child(1) { height: 5px; } .conf i:nth-child(2) { height: 7px; } .conf i:nth-child(3) { height: 9px; } .conf i:nth-child(4) { height: 11px; } .conf i:nth-child(5) { height: 14px; }
 .conf i.on { background: var(--gold); }
+/* Couleur selon la confiance : 5 vert vif, 4 vert clair, 3 jaune, 2 orange, 1 rouge */
+.conf.c5 i.on { background: #16a34a; }
+.conf.c4 i.on { background: #86efac; }
+.conf.c3 i.on { background: #facc15; }
+.conf.c2 i.on { background: #fb923c; }
+.conf.c1 i.on { background: #ef4444; }
 
 /* ============ Filtres ============ */
 .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0 6px; }
@@ -214,7 +220,8 @@ main { max-width: 1040px; margin: 0 auto; padding: 8px 16px 28px; }
 .hero-mid small { opacity: .85; font-size: 12px; }
 .hero-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; position: relative; z-index: 1; flex-wrap: wrap; }
 .hero-foot .pick { background: rgba(255, 255, 255, .18); padding: 8px 12px; border-radius: 12px; font-weight: 800; font-size: 14px; }
-.hero .conf i { background: rgba(255, 255, 255, .3); } .hero .conf i.on { background: #fff; }
+.hero .conf { background: rgba(0, 0, 0, .25); padding: 4px 6px; border-radius: 8px; height: auto; }
+.hero .conf i:not(.on) { background: rgba(255, 255, 255, .3); }
 .ring { --p: 50; width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; background: conic-gradient(var(--ring, #fff) calc(var(--p) * 1%), rgba(255, 255, 255, .22) 0); flex: none; }
 .ring span { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; font-weight: 900; font-size: 13px; background: color-mix(in srgb, #0891b2 70%, #10b981); }
 
