@@ -121,7 +121,7 @@ export function fair(odds) {
 }
 
 // ---------- Prédiction complète d'un match ----------
-export function predict({ hId, aId, hName, aName, nat, neutral, ratings, market }) {
+export function predict({ hId, aId, hName, aName, nat, neutral, ratings, market, absAdj }) {
   const eh = ratings.get(hId, nat, hName), ea = ratings.get(aId, nat, aName);
   const adv = neutral ? 0 : nat ? HOME_ADV_NAT : HOME_ADV;
   const weModel = expScore(eh - ea + adv);
@@ -129,8 +129,13 @@ export function predict({ hId, aId, hName, aName, nat, neutral, ratings, market 
   let total = 1.35 * (A.a * B.d + B.a * A.d) * (neutral ? 0.97 : 1);
   total = Math.min(4.2, Math.max(1.7, total));
 
-  const sModel = solveSupremacy(total, weModel);
-  const mModel = scoreMatrix((total + sModel) / 2, (total - sModel) / 2);
+  let sModel = solveSupremacy(total, weModel);
+  // Absences (blessés, suspendus, compo) : on baisse les buts attendus de l'équipe privée de ses buteurs/passeurs.
+  // Appliqué au modèle seulement : les cotes du marché tiennent déjà compte des absences connues.
+  const fh = absAdj?.h ?? 1, fa = absAdj?.a ?? 1;
+  const lh0 = ((total + sModel) / 2) * fh, la0 = ((total - sModel) / 2) * fa;
+  total = lh0 + la0; sModel = lh0 - la0;
+  const mModel = scoreMatrix(lh0, la0);
   const model = outcome(mModel);
 
   // Mélange avec le marché quand des cotes existent : plus prudent et plus fiable.

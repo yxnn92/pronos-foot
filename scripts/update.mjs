@@ -245,6 +245,35 @@ function redCards(summary) {
     .filter((x) => x.team && x.name);
 }
 
+// Impact des absences sur l'attaque : part des buts (+ ½ passes) de l'équipe qui manque.
+// Le remplaçant compense environ la moitié → baisse des buts attendus = ½ × part manquante (plafonnée).
+// Réglage prudent, non testé sur le passé (pas d'historique des compos) : effet volontairement modéré.
+function absenceImpact(teamId, leaders, lineup, absents, teamStats) {
+  const L = leaders?.[teamId];
+  if (!L || !teamStats?.gf) return { f: 1, who: [] };
+  const byId = new Map();
+  for (const kind of ['g', 'a']) for (const p of L[kind] || []) {
+    if (!p.id || !p.v) continue;
+    const x = byId.get(p.id) || { id: p.id, name: p.name, g: 0, a: 0 };
+    x[kind] = p.v; byId.set(p.id, x);
+  }
+  const xi = lineup?.[teamId]?.xi?.map((p) => p.id), subs = lineup?.[teamId]?.subs?.map((p) => p.id);
+  let lost = 0; const who = [];
+  for (const p of byId.values()) {
+    const abs = absents.find((a) => samePlayer(p.name, a));
+    let miss = 0, why = '';
+    if (xi?.length) { if (!xi.includes(p.id)) { miss = subs?.includes(p.id) ? 0.7 : 1; why = subs?.includes(p.id) ? 'remplaçant' : 'absent de la compo'; } }
+    else if (abs) { miss = abs.kind === 'incertain' ? 1 - (abs.chance ?? 50) / 100 : 1; why = abs.kind; }
+    if (miss > 0) {
+      const share = Math.min(1, (p.g + 0.5 * p.a) / (teamStats.gf + 6)); // +6 : amortit les petits échantillons (début de LDC…)
+      lost += miss * share;
+      who.push({ name: p.name, g: p.g, a: p.a, why, share: r3(miss * share) });
+    }
+  }
+  lost = Math.min(lost, 0.6);
+  return { f: r3(1 - 0.5 * lost), who };
+}
+
 function players(teamId, lambda, leaders, lineup, teamStats, scorers, absents = []) {
   const L = leaders?.[teamId];
   if (!L) return [];
@@ -425,10 +454,15 @@ async function main() {
     const ouRaw = sum.odds.ou || null;
     const frOu = ouRaw ? (() => { const [po, pu] = toFr([ouRaw.over, ouRaw.under]); return { line: ouRaw.line, over: po, under: pu }; })() : null;
     const odds = { x12: toFr(x12), ou: frOu, src: x12 ? 'France estimée' : null, rawSrc: sum.odds.b365 ? 'Bet365' : sum.odds.dk ? 'DraftKings' : null, rawOu: ouRaw };
-    const pr = predict({ hId: e.h.id, aId: e.a.id, hName: e.h.name, aName: e.a.name, nat: e.nat, neutral: e.neutral, ratings, market: x12 ? { x12, ou: ouRaw } : null });
+    const sh = teamComp.get(`${e.slug}|${e.season}|${e.h.id}`), sa = teamComp.get(`${e.slug}|${e.season}|${e.a.id}`);
+    // Absences → baisse des buts attendus (matchs pas encore commencés)
+    const imp = e.state === 'pre'
+      ? { h: absenceImpact(e.h.id, sum.leaders, sum.lineup, absents.h, sh), a: absenceImpact(e.a.id, sum.leaders, sum.lineup, absents.a, sa) }
+      : { h: { f: 1, who: [] }, a: { f: 1, who: [] } };
+    const pr = predict({ hId: e.h.id, aId: e.a.id, hName: e.h.name, aName: e.a.name, nat: e.nat, neutral: e.neutral, ratings, market: x12 ? { x12, ou: ouRaw } : null, absAdj: { h: imp.h.f, a: imp.a.f } });
+    pr.abs = imp;
     const picks = buildPicks(pr, odds, { h: e.h.short, a: e.a.short });
 
-    const sh = teamComp.get(`${e.slug}|${e.season}|${e.h.id}`), sa = teamComp.get(`${e.slug}|${e.season}|${e.a.id}`);
     const h2h = results.filter((r) => (r.h.id === e.h.id && r.a.id === e.a.id) || (r.h.id === e.a.id && r.a.id === e.h.id))
       .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5)
       .map((r) => ({ d: r.date, h: r.h.short, a: r.a.short, hs: r.hs, as: r.as, comp: compInfo[r.slug]?.short || r.slug }));

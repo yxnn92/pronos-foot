@@ -70,13 +70,23 @@ const verdictTag = (v) => !v ? '' : v.final ? (v.win ? '<span class="tag win">�
 // ---------- blessés / suspendus ----------
 const absCount = (m) => (m.absents?.h?.length || 0) + (m.absents?.a?.length || 0);
 const KIND_TAG = { 'blessé': 'lose', 'suspendu': 'lose', 'incertain': 'big' };
+// Effet des absences sur le calcul du prono (buts attendus en baisse pour l'équipe touchée)
+function impactHtml(m) {
+  const A = m.pred?.abs; if (!A) return '';
+  const rows = [['h', m.h], ['a', m.a]].filter(([k]) => A[k] && A[k].f < 1).map(([k, t]) => {
+    const w = A[k].who.map((x) => `${esc(x.name)} (${esc(x.why)}, ${x.g} b. ${x.a} p.)`).join(', ');
+    return `<div class="impact"><b>${esc(t.short)} : −${Math.round((1 - A[k].f) * 100)} % de buts attendus</b><div class="small muted">${w}</div></div>`;
+  });
+  return rows.length ? `<div class="impact-box"><div class="eyebrow">Pris en compte dans le prono</div>${rows.join('')}
+    <p class="note" style="margin-bottom:0">Le modèle baisse l'attaque de l'équipe selon la part de ses buts et passes qui manque (le remplaçant en compense la moitié). Les cotes du marché, qui comptent pour 55 %, intègrent déjà ces absences.</p></div>` : '';
+}
 function absentsHtml(m) {
   if (!m.absents || m.state !== 'pre') return '';
   const side = (t, list) => `<div style="margin:8px 0 4px"><b style="display:flex;gap:8px;align-items:center">${img(t.logo, 'logo', 'width:18px;height:18px')}${esc(t.short)}</b></div>` +
     (list.length ? list.map((a) => `<div class="abs-row"><span class="tag ${KIND_TAG[a.kind] || ''}">${esc(a.kind)}${a.kind === 'incertain' && a.chance != null ? ' ' + a.chance + ' %' : ''}</span><div><b>${esc(a.name)}</b><div class="small muted">${esc(a.info || '')}</div></div></div>`).join('')
       : '<div class="small muted">Aucun absent connu.</div>');
   const pl = m.slug === 'eng.1';
-  return `<div class="card pad section"><h3 style="margin-top:0">🚑 Blessés et suspendus</h3>${side(m.h, m.absents.h)}${side(m.a, m.absents.a)}
+  return `<div class="card pad section"><h3 style="margin-top:0">🚑 Blessés et suspendus</h3>${side(m.h, m.absents.h)}${side(m.a, m.absents.a)}${impactHtml(m)}
     <p class="note">${pl ? 'Premier League : blessés, incertains et suspendus selon Fantasy Premier League (officiel). ' : 'Hors Premier League, aucune source gratuite ne donne les blessés : seuls les suspendus après un carton rouge au dernier match sont détectés. '}Les compos officielles (≈1 h avant) confirment les absents.</p></div>`;
 }
 
