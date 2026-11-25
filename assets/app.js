@@ -247,6 +247,11 @@ function renderSemaine() {
 // ---------- Combinés : paris disponibles pour chaque match ----------
 const LEAGUES = ['eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1'];
 const r2 = (x) => Math.round(x * 100) / 100;
+const PLAYER_TYPES = {
+  Scorer: { field: 'pg', label: 'buteur', name: 'Buteur' },
+  Assist: { field: 'pa', label: 'passeur décisif', name: 'Passeur' },
+  Decisive: { field: 'pd', label: 'décisif (but ou passe)', name: 'Décisif' },
+};
 const estOdds = (p) => r2(Math.max(1.02, 0.94 / p)); // cote estimée (marge ≈ 6 %) quand le bookmaker ne la donne pas
 // Tous les paris qu'on peut mettre dans un combiné pour un match.
 function legFor(m, type, key) {
@@ -265,18 +270,30 @@ function legFor(m, type, key) {
     if (m.odds.ou && String(m.odds.ou.line) === String(parseFloat(L))) o = over ? m.odds.ou.over : m.odds.ou.under;
   } else if (type === 'BTTS') {
     prob = key === 'yes' ? p.btts : 1 - p.btts; label = key === 'yes' ? 'Les deux équipes marquent' : 'Une équipe ne marque pas';
+  } else if (PLAYER_TYPES[type]) {
+    // Paris joueurs : buteur (cote Bet365 quand elle existe), passeur, décisif (but ou passe)
+    const pl = [...m.players.h, ...m.players.a].find((x) => x.id === key);
+    if (!pl || pl.status === 'absent') return null;
+    prob = pl[PLAYER_TYPES[type].field]; label = `${pl.name} ${PLAYER_TYPES[type].label}`;
+    if (type === 'Scorer' && pl.o) o = pl.o;
   }
   if (prob == null) return null;
   if (!o) { o = estOdds(prob); est = true; }
   return { id: `${m.id}|${type}|${key}`, mid: m.id, type, key, label, p: r2(prob * 100) / 100, odds: o, est, match: `${m.h.short} - ${m.a.short}`, date: m.date, slug: m.slug };
 }
-function allLegs(m) {
+function playerLegs(m) {
+  const out = [];
+  for (const pl of [...m.players.h, ...m.players.a]) for (const t of Object.keys(PLAYER_TYPES)) out.push(legFor(m, t, pl.id));
+  return out.filter((l) => l && l.p >= 0.15 && l.p <= 0.95 && l.odds >= 1.05);
+}
+function allLegs(m, withPlayers = false) {
   const out = [];
   for (const k of ['h', 'd', 'a']) out.push(legFor(m, '1N2', k));
   for (const k of ['1N', 'N2', '12']) out.push(legFor(m, 'DC', k));
   for (const L of ['0.5', '1.5', '2.5', '3.5']) { out.push(legFor(m, 'Buts', 'o' + L)); out.push(legFor(m, 'Buts', 'u' + L)); }
   out.push(legFor(m, 'BTTS', 'yes'), legFor(m, 'BTTS', 'no'));
-  return out.filter((l) => l && l.p >= 0.15 && l.p <= 0.97 && l.odds >= 1.05);
+  const legs = out.filter((l) => l && l.p >= 0.15 && l.p <= 0.97 && l.odds >= 1.05);
+  return withPlayers ? legs.concat(playerLegs(m)) : legs;
 }
 const legById = (id) => { const [mid, type, key] = id.split('|'); const m = M.matches.find((x) => x.id === mid); return m ? legFor(m, type, key) : null; };
 
@@ -284,18 +301,28 @@ const legById = (id) => { const [mid, type, key] = id.split('|'); const m = M.ma
 // On cherche n paris (matchs différents) dont la cote totale est proche de la cible,
 // en gardant les paris les plus probables pour leur cote. Les vraies cotes sont préférées aux cotes estimées.
 function rng(seed) { let s = seed >>> 0 || 1; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
-function generate(pool, n, target, seed = 1, exclude = null) {
+function generate(pool, n, target, seed = 1, exclude = null, withPlayers = false) {
   const byMatch = new Map();
-  for (const m of pool) { const legs = allLegs(m).filter((l) => !exclude?.has(l.id)); if (legs.length) byMatch.set(m.id, legs); }
+  for (const m of pool) { const legs = allLegs(m, withPlayers).filter((l) => !exclude?.has(l.id)); if (legs.length) byMatch.set(m.id, legs); }
   if (byMatch.size < n) return null;
   const rand = rng(seed), mids = [...byMatch.keys()];
   const legScore = (l) => Math.log(l.p * l.odds) - (l.est ? 0.04 : 0);
-  const score = (set) => { const lo = set.reduce((t, l) => t + Math.log(l.odds), 0); return set.reduce((t, l) => t + legScore(l), 0) - 2.5 * Math.abs(lo - Math.log(target)); };
+  // Avec « joueurs » coché : au moins un pari joueur dans le combiné
+  const noPlayer = (set) => withPlayers && !set.some((l) => PLAYER_TYPES[l.type]);
+  const score = (set) => { const lo = set.reduce((t, l) => t + Math.log(l.odds), 0); return set.reduce((t, l) => t + legScore(l), 0) - 2.5 * Math.abs(lo - Math.log(target)) - (noPlayer(set) ? 10 : 0); };
   const per = Math.pow(target, 1 / n);
   // départ : pour chaque match, le pari le plus proche de la cote par pari visée
   let cands = mids.map((id) => byMatch.get(id).reduce((b, l) => (Math.abs(Math.log(l.odds / per)) - legScore(l) < Math.abs(Math.log(b.odds / per)) - legScore(b) ? l : b)));
   cands.sort((a, b) => (Math.abs(Math.log(a.odds / per)) - legScore(a)) - (Math.abs(Math.log(b.odds / per)) - legScore(b)) + (rand() - 0.5) * 0.15 * seed);
-  let set = cands.slice(0, n), best = score(set);
+  let set = cands.slice(0, n);
+  if (noPlayer(set)) {
+    // on remplace le dernier pari par le meilleur pari joueur d'un autre match
+    const used = new Set(set.slice(0, n - 1).map((l) => l.mid));
+    const pl = [...byMatch.values()].flat().filter((l) => PLAYER_TYPES[l.type] && !used.has(l.mid))
+      .sort((a, b) => (legScore(b) - Math.abs(Math.log(b.odds / per))) - (legScore(a) - Math.abs(Math.log(a.odds / per))) + (rand() - 0.5) * 0.3 * seed)[0];
+    if (pl) set[n - 1] = pl;
+  }
+  let best = score(set);
   for (let it = 0; it < 1500; it++) {
     const i = Math.floor(rand() * n), used = new Set(set.map((l) => l.mid));
     const mid = rand() < 0.5 ? set[i].mid : mids[Math.floor(rand() * mids.length)];
@@ -327,7 +354,8 @@ function toast(msg) {
 }
 
 // ---------- onglet Combinés ----------
-const cState = { scope: 'all', period: 7, n: 3, target: 4, seed: 1, mise: 10, seen: new Set(), last: null };
+const cState = { scope: 'all', period: 7, n: 3, target: 4, seed: 1, mise: 10, seen: new Set(), last: null, players: false };
+try { cState.players = localStorage.getItem('combiJoueurs') === '1'; } catch (e) {}
 const resetGen = () => { cState.seed = 1; cState.seen = new Set(); };
 const sliderToOdds = (v) => r2(1.5 * Math.pow(50 / 1.5, v / 100));
 const oddsToSlider = (o) => Math.round((100 * Math.log(o / 1.5)) / Math.log(50 / 1.5));
@@ -352,27 +380,32 @@ function genCard(c, title, sub, id) {
 function renderCombis() {
   const ldcPool = poolFor('ldc', 7), euroPool = poolFor('euro', 7), lgPool = poolFor('leagues', 7);
   const cupPool = ldcPool.length >= 2 ? ldcPool : euroPool, cupName = ldcPool.length >= 2 ? 'Ligue des champions' : "Coupes d'Europe";
+  const wp = cState.players;
   const sugg = [
-    [cupName, 'Sûr', generate(cupPool, 2, 2, 3)], [cupName, 'Audacieux', generate(cupPool, 4, 8, 5)],
-    ['Championnats', 'Sûr', generate(lgPool, 3, 2.5, 7)], ['Championnats', 'Audacieux', generate(lgPool, 5, 12, 9)],
+    [cupName, 'Sûr', generate(cupPool, 2, 2, 3, null, wp)], [cupName, 'Audacieux', generate(cupPool, 4, 8, 5, null, wp)],
+    ['Championnats', 'Sûr', generate(lgPool, 3, 2.5, 7, null, wp)], ['Championnats', 'Audacieux', generate(lgPool, 5, 12, 9, null, wp)],
   ];
   const pool = poolFor(cState.scope, cState.period);
   // « Autre proposition » : on écarte les paris déjà proposés (on repart de zéro quand il n'en reste plus assez)
-  let gen = generate(pool, cState.n, cState.target, cState.seed, cState.seen);
-  if (!gen && cState.seen.size) { cState.seen = new Set(); gen = generate(pool, cState.n, cState.target, cState.seed); }
+  let gen = generate(pool, cState.n, cState.target, cState.seed, cState.seen, wp);
+  if (!gen && cState.seen.size) { cState.seen = new Set(); gen = generate(pool, cState.n, cState.target, cState.seed, null, wp); }
   cState.last = gen;
   const scopes = [['all', 'Tout'], ['ldc', 'LDC'], ['euro', "Coupes d'Europe"], ['leagues', 'Championnats'], ...LEAGUES.map((s) => [s, comp(s).name])];
   const myLegs = my.map((x) => ({ ...legById(x.id), ...x })).filter((l) => l.mid);
   const myOdds = myLegs.reduce((t, l) => t * (Number(l.odds) || 1), 1), myP = myLegs.reduce((t, l) => t * (l.p || 0), 1);
   const sameMatch = new Set(myLegs.map((l) => l.mid)).size < myLegs.length;
-  const legVerdict = (l) => { const m = M.matches.find((x) => x.id === l.mid); if (!m || m.hs == null || m.state === 'pre') return ''; const w = gradePick(l, m.hs, m.as); return m.completed ? (w ? '<span class="tag win">✓</span>' : '<span class="tag lose">✗</span>') : `<span class="tag ${w ? 'win' : 'lose'}">● ${m.hs}-${m.as}</span>`; };
+  const legVerdict = (l) => { const m = M.matches.find((x) => x.id === l.mid); if (!m || m.hs == null || m.state === 'pre') return '';
+    if (PLAYER_TYPES[l.type]) return `<span class="tag">${m.state === 'in' ? '● ' : ''}${m.hs}-${m.as}</span>`; /* pas de suivi buteur en direct */ const w = gradePick(l, m.hs, m.as); return m.completed ? (w ? '<span class="tag win">✓</span>' : '<span class="tag lose">✗</span>') : `<span class="tag ${w ? 'win' : 'lose'}">● ${m.hs}-${m.as}</span>`; };
 
   view.innerHTML = `
     <h2>🎯 Combinés</h2>
     <div class="card pad gen">
       <div class="eyebrow">Générateur de combiné</div>
       <div class="filters" style="margin-top:10px"><div class="chips">${scopes.map(([k, l]) => `<button class="chip ${cState.scope === k ? 'active' : ''}" data-scope="${k}">${l}</button>`).join('')}</div></div>
-      <div class="segmented" style="margin:4px 0 12px">${[[1, "Aujourd'hui"], [2, '48 h'], [7, '7 jours']].map(([d, l]) => `<button class="${cState.period === d ? 'active' : ''}" data-period="${d}">${l}</button>`).join('')}</div>
+      <div class="filters" style="margin:4px 0 12px">
+        <div class="segmented">${[[1, "Aujourd'hui"], [2, '48 h'], [7, '7 jours']].map(([d, l]) => `<button class="${cState.period === d ? 'active' : ''}" data-period="${d}">${l}</button>`).join('')}</div>
+        <label class="switch"><input type="checkbox" id="withPlayers" ${wp ? 'checked' : ''}><span class="sw"></span>Inclure les joueurs <span class="small muted">(au moins 1 pari buteur, passeur ou décisif)</span></label>
+      </div>
       <div class="gen-ctrls">
         <div class="ctrl"><label>Cote visée <b id="tVal">${odd(cState.target)}</b></label>
           <input type="range" id="tRange" min="0" max="100" value="${oddsToSlider(cState.target)}"><div class="range-ends"><span>1,50</span><span>50</span></div></div>
@@ -410,6 +443,7 @@ function renderCombis() {
   const tr = $('#tRange');
   tr.oninput = () => { $('#tVal').textContent = odd(sliderToOdds(+tr.value)); };
   tr.onchange = () => { cState.target = sliderToOdds(+tr.value); resetGen(); render(); };
+  $('#withPlayers').onchange = (e) => { cState.players = e.target.checked; try { localStorage.setItem('combiJoueurs', cState.players ? '1' : '0'); } catch (x) {} resetGen(); render(); };
   $('#reroll')?.addEventListener('click', () => { for (const l of cState.last?.legs || []) cState.seen.add(l.id); cState.seed++; render(); });
   view.querySelectorAll('[data-addall]').forEach((b) => b.onclick = () => { const ids = b.dataset.addall.split(','); ids.forEach((id) => addLeg(id, true)); toast(`${ids.length} paris ajoutés à ton combiné`); render(); });
   view.querySelectorAll('[data-del]').forEach((b) => b.onclick = () => { my = my.filter((l) => l.id !== b.dataset.del); saveMy(); render(); });
@@ -654,7 +688,11 @@ function fichePlayers(m) {
     <div class="scorers"><span class="mk-head">Joueur</span><span class="mk-head" style="text-align:right">À tout moment</span><span class="mk-head" style="text-align:right">1er buteur</span><span class="mk-head" style="text-align:right">Chances</span>
     ${sc.map((s) => `<span>${esc(s.name)}</span><b style="text-align:right">${odd(s.o)}</b><span class="muted" style="text-align:right">${s.first ? odd(s.first) : '–'}</span><span class="muted" style="text-align:right">${pct(Math.min(0.95, 0.85 / s.o))}</span>`).join('')}</div>
     <p class="note">Chances = ce que la cote représente, sans la marge du bookmaker (≈15 %).</p></div>` : '<p class="note">Pas encore de cotes buteur pour ce match.</p>';
-  return list(m.h, m.players.h) + list(m.a, m.players.a) + odds;
+  const pLegs = m.state === 'pre' ? playerLegs(m) : [];
+  const adds = pLegs.length ? `<div class="card pad section"><div class="row-between"><div class="eyebrow">Ajouter un pari joueur à mon combiné</div></div>
+    ${Object.entries(PLAYER_TYPES).map(([t, d]) => { const ls = pLegs.filter((l) => l.type === t).sort((a, b) => b.p - a.p); return ls.length ? `<h3>${d.name}</h3><div class="leg-grid">${ls.map((l) => `<button class="leg-btn" data-add="${esc(l.id)}"><span>${esc(l.label.replace(' ' + d.label, ''))} <span class="muted">${pct(l.p)}</span></span><b>${odd(l.odds)}${l.est ? '≈' : ''}</b></button>`).join('')}</div>` : ''; }).join('')}
+    <p class="note">Cote buteur = Bet365 quand elle existe. Cotes passeur et décisif ≈ estimées : remplace-les par celles de Betclic dans Mon combiné.</p></div>` : '';
+  return list(m.h, m.players.h) + list(m.a, m.players.a) + adds + odds;
 }
 
 // ---------- scores en direct ----------
