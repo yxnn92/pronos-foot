@@ -1,0 +1,34 @@
+# Récupère les cotes passées (football-data.co.uk) pour tester le modèle.
+# Se lance à la main (Run workflow) ou quand ce fichier ou scripts/fd.mjs change.
+name: Données de test (cotes passées)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['scripts/fd.mjs', '.github/workflows/fetch-data.yml']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pronos
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/fd.mjs
+      - name: Enregistrer
+        run: |
+          git config user.name "pronos-bot"
+          git config user.email "pronos-bot@users.noreply.github.com"
+          git add data/cache/fd
+          git diff --cached --quiet || git commit -m "Cotes passées (football-data)"
+          git pull --rebase --autostash || true
+          git push
