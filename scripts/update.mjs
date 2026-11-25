@@ -52,6 +52,18 @@ const fracToDec = (s) => {
   const v = parseFloat(s); return isFinite(v) && v > 1 ? v : null;
 };
 const SUMMARY_VERSION = 2; // à augmenter quand on extrait de nouvelles infos (force le rechargement)
+// ---------- cotes « France » ----------
+// Comparaison faite le 25/11/2026 sur 9 matchs de LDC : Betclic reverse ≈ 91 % des mises sur le 1N2, Bet365 ≈ 94,4 %.
+// On garde les probabilités du marché (sans marge) et on applique le taux de retour français.
+const FR_PAYOUT = 0.91;
+const FR_SCORER = 0.86; // Raphinha buteur : 1,53 chez Bet365, 1,31 chez Betclic
+const r2 = (x) => Math.round(x * 100) / 100;
+function toFr(odds) {
+  if (!odds?.length || odds.some((o) => !o)) return null;
+  const inv = odds.map((o) => 1 / o), s = inv.reduce((a, b) => a + b, 0);
+  return inv.map((x) => r2(Math.max(1.01, FR_PAYOUT / (x / s))));
+}
+const frScorer = (o) => r2(Math.max(1.01, o * FR_SCORER));
 const PLAYER_EDGE = 0.1;   // value buteur si probabilité × cote ≥ 1,10 (marges plus fortes sur ce marché)
 const logo = (t) => t?.logo || t?.logos?.[0]?.href || (t?.id ? `https://a.espncdn.com/i/teamlogos/soccer/500/${t.id}.png` : '');
 
@@ -221,15 +233,16 @@ function players(teamId, lambda, leaders, lineup, teamStats, scorers) {
     const so = scorerOdds(p.name, scorers);
     const row = { ...p, status, pg, pa: r3(1 - Math.exp(-la)), pd: r3(1 - Math.exp(-(lg + la))) };
     if (so) {
-      row.o = so.o; row.oFirst = so.first;
-      // Probabilité du marché sans la marge (environ 15 % sur les cotes buteur), puis mélange 45 % modèle / 55 % marché.
+      // Cote buteur France estimée : les books français sont nettement plus bas que Bet365 sur ce marché.
+      row.oRaw = so.o; row.o = frScorer(so.o); row.oFirst = so.first ? frScorer(so.first) : null;
+      // Probabilité du marché sans la marge (environ 15 % sur les cotes buteur Bet365), puis mélange 45 % modèle / 55 % marché.
       const pm = Math.min(0.95, (1 / so.o) * 0.85);
       row.pgModel = pg; row.pgMarket = r3(pm);
       if (status !== 'absent') row.pg = r3(0.45 * pg + 0.55 * pm);
       // Value seulement pour un vrai buteur régulier : au moins 2 buts en 5 matchs ou plus,
       // et au moins 25 % de chances selon le modèle (écarte les défenseurs buteurs sur coups de pied arrêtés).
-      if (status !== 'absent' && p.g >= 2 && (p.m || 0) >= 5 && pg >= 0.25 && so.o <= 6 && Math.abs(pg - pm) <= 0.15 && row.pg * so.o >= 1 + PLAYER_EDGE) {
-        row.value = true; row.edge = r3(row.pg * so.o - 1);
+      if (status !== 'absent' && p.g >= 2 && (p.m || 0) >= 5 && pg >= 0.25 && row.o <= 6 && Math.abs(pg - pm) <= 0.15 && row.pg * row.o >= 1 + PLAYER_EDGE) {
+        row.value = true; row.edge = r3(row.pg * row.o - 1);
       }
     }
     out.push(row);
@@ -328,9 +341,13 @@ async function main() {
 
   const matches = window.map((e) => {
     const sum = sumCache[e.id] || { odds: {}, form: {}, leaders: {}, lineup: {} };
+    // Cotes du marché (Bet365 / DraftKings, sites étrangers) → cotes « France » estimées,
+    // plus basses car les bookmakers français reversent moins (≈ 91 % au lieu de ≈ 94 %).
     const x12 = sum.odds.b365 || sum.odds.dk || null;
-    const odds = { x12, ou: sum.odds.ou || null, src: sum.odds.b365 ? 'Bet365' : sum.odds.dk ? 'DraftKings' : null };
-    const pr = predict({ hId: e.h.id, aId: e.a.id, hName: e.h.name, aName: e.a.name, nat: e.nat, neutral: e.neutral, ratings, market: x12 ? { x12, ou: odds.ou } : null });
+    const ouRaw = sum.odds.ou || null;
+    const frOu = ouRaw ? (() => { const [po, pu] = toFr([ouRaw.over, ouRaw.under]); return { line: ouRaw.line, over: po, under: pu }; })() : null;
+    const odds = { x12: toFr(x12), ou: frOu, src: x12 ? 'France estimée' : null, rawSrc: sum.odds.b365 ? 'Bet365' : sum.odds.dk ? 'DraftKings' : null, rawOu: ouRaw };
+    const pr = predict({ hId: e.h.id, aId: e.a.id, hName: e.h.name, aName: e.a.name, nat: e.nat, neutral: e.neutral, ratings, market: x12 ? { x12, ou: ouRaw } : null });
     const picks = buildPicks(pr, odds, { h: e.h.short, a: e.a.short });
 
     const sh = teamComp.get(`${e.slug}|${e.season}|${e.h.id}`), sa = teamComp.get(`${e.slug}|${e.season}|${e.a.id}`);
@@ -359,7 +376,7 @@ async function main() {
     }
 
     // Évolution des cotes : première cote vue (ou ouverture DraftKings) → cote actuelle
-    const first = hist?.snaps?.[0]?.x12 || sum.odds.dkOpen || null;
+    const first = toFr(hist?.snaps?.[0]?.x12 || sum.odds.dkOpen || null); // l'historique garde les cotes d'origine
     return {
       id: e.id, slug: e.slug, date: e.date, state: e.state, completed: e.completed, detail: e.detail, neutral: e.neutral,
       h: e.h, a: e.a, hs: e.hs, as: e.as,

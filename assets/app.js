@@ -453,7 +453,7 @@ function renderCombis() {
 }
 
 // ---------- onglet Joueurs ----------
-const oddCell = (p) => (p.o ? `<span class="o ${p.value ? 'val' : ''}" title="Cote Bet365 buteur à tout moment">${p.value ? '◆ ' : ''}${odd(p.o)}</span>` : '<span class="o">–</span>');
+const oddCell = (p) => (p.o ? `<span class="o ${p.value ? 'val' : ''}" title="Cote buteur France estimée (d'après Bet365)">${p.value ? '◆ ' : ''}${odd(p.o)}</span>` : '<span class="o">–</span>');
 function renderJoueurs() {
   const pre = M.matches.filter((m) => isPre(m) && Date.parse(m.date) - Date.now() < 3 * 864e5);
   let rows = [];
@@ -467,7 +467,7 @@ function renderJoueurs() {
   const seg = (k, l) => `<button class="${state.pSort === k ? 'active' : ''}" data-sort="${k}">${l}</button>`;
   view.innerHTML = `
     <h2>⚽ Joueurs décisifs</h2>
-    <p class="note">Matchs des 3 prochains jours. Chances calculées à partir des buts et passes du joueur dans la compétition et des buts attendus de son équipe, mélangées à la cote buteur Bet365.</p>
+    <p class="note">Matchs des 3 prochains jours. Chances calculées à partir des buts et passes du joueur dans la compétition et des buts attendus de son équipe, mélangées à la cote buteur du marché.</p>
     <div class="filters"><div class="segmented">${seg('pd', 'Décisif')}${seg('pg', 'Buteur')}${seg('pa', 'Passeur')}</div>
       <select id="pComp"><option value="all">Toutes les compétitions</option>${comps.map((c) => `<option value="${c}" ${c === state.pComp ? 'selected' : ''}>${esc(comp(c).name)}</option>`).join('')}</select>
       <label class="toggle"><input type="checkbox" id="pValue" ${state.pValue ? 'checked' : ''}> Value buteur</label></div>
@@ -479,7 +479,7 @@ function renderJoueurs() {
         <span class="v">${pct(r.pg)}</span><span class="v">${pct(r.pa)}</span><span class="v">${pct(r.pd)}</span>${oddCell(r)}
       </div>`).join('') || `<div class="empty">${state.pValue ? 'Aucun value buteur pour le moment.' : 'Pas de données joueurs pour le moment.'}</div>`}
     </div>
-    <p class="note">Cote = Bet365 « buteur à tout moment ». ◆ = value buteur (nos chances × cote ≥ 1,10, buteurs réguliers uniquement). Pas de cotes passeur chez ESPN.</p>`;
+    <p class="note">Cote = buteur à tout moment, <b>estimation France</b> (≈ Betclic), calculée d'après Bet365. ◆ = value buteur (nos chances × cote ≥ 1,10, buteurs réguliers uniquement). Pas de cotes passeur chez ESPN.</p>`;
   view.querySelectorAll('[data-sort]').forEach((b) => b.onclick = () => { state.pSort = b.dataset.sort; render(); });
   $('#pComp').onchange = (e) => { state.pComp = e.target.value; render(); };
   $('#pValue').onchange = (e) => { state.pValue = e.target.checked; render(); };
@@ -600,14 +600,14 @@ function fichePronos(m) {
       <div class="leg-grid">${legs.map((l) => `<button class="leg-btn" data-add="${esc(l.id)}"><span>${esc(l.label)}</span><b>${odd(l.odds)}${l.est ? '≈' : ''}</b></button>`).join('')}</div></div>` : ''}
     <div class="card pad section"><h3 style="margin-top:0">Résultat 1N2</h3>
       <div class="mk">${mkRow(esc(m.h.short), p.p.h, o?.[0], arrow(0), 'var(--home)')}${mkRow('Match nul', p.p.d, o?.[1], arrow(1), 'var(--draw)')}${mkRow(esc(m.a.short), p.p.a, o?.[2], arrow(2), 'var(--away)')}</div>
-      ${p.market ? `<p class="note">Modèle seul : ${pct(p.model.h)} / ${pct(p.model.d)} / ${pct(p.model.a)} · Bookmakers : ${pct(p.market.h)} / ${pct(p.market.d)} / ${pct(p.market.a)}${m.odds.src ? ` (${m.odds.src})` : ''}</p>` : '<p class="note">Pas encore de cotes : probabilités du modèle seul.</p>'}
+      ${p.market ? `<p class="note">Modèle seul : ${pct(p.model.h)} / ${pct(p.model.d)} / ${pct(p.model.a)} · Bookmakers : ${pct(p.market.h)} / ${pct(p.market.d)} / ${pct(p.market.a)}</p><p class="note">Cotes affichées : <b>estimation France</b> (≈ Betclic, Winamax…), calculées d'après ${esc(m.odds.rawSrc || 'Bet365')}${m.odds.b365 ? ` (Bet365 : ${m.odds.b365.map(odd).join(' / ')})` : ''}. Les books français reversent moins (≈ 91 % des mises contre ≈ 94 %), d'où des cotes un peu plus basses. Pour un calcul exact, mets ta cote Betclic dans Mon combiné.</p>` : '<p class="note">Pas encore de cotes : probabilités du modèle seul.</p>'}
       <h3>Double chance</h3>
       <div class="mk">${mkRow(`${esc(m.h.short)} ou nul`, p.dc['1N'])}${mkRow(`Nul ou ${esc(m.a.short)}`, p.dc['N2'])}${mkRow('Pas de match nul', p.dc['12'])}</div>
     </div>
     <div class="card pad section"><h3 style="margin-top:0">Buts dans le match</h3>
       <div class="mk"><div class="mk-row mk-head"><span>Ligne</span><span style="text-align:right">Plus</span><span style="text-align:right">Moins</span></div>
       ${['0.5', '1.5', '2.5', '3.5', '4.5'].map((L) => `<div class="mk-row"><div class="lab"><span>${L.replace('.', ',')} buts</span><div class="meter"><i style="width:${g[L] * 100}%"></i></div></div><span class="pct">${pct(g[L])}</span><span class="odd" style="font-weight:700">${pct(1 - g[L])}</span></div>`).join('')}</div>
-      ${m.odds.ou ? `<p class="note">Bookmaker : ligne ${String(m.odds.ou.line).replace('.', ',')} → plus ${odd(m.odds.ou.over)} / moins ${odd(m.odds.ou.under)}</p>` : ''}
+      ${m.odds.ou ? `<p class="note">Cote France estimée : ligne ${String(m.odds.ou.line).replace('.', ',')} → plus ${odd(m.odds.ou.over)} / moins ${odd(m.odds.ou.under)}</p>` : ''}
       <h3>Les deux équipes marquent</h3>
       <div class="mk">${mkRow('Oui', p.btts)}${mkRow('Non', 1 - p.btts, null, '', 'var(--draw)')}</div>
       <h3>Buts de chaque équipe</h3>
@@ -684,14 +684,14 @@ function fichePlayers(m) {
     <div class="player headrow"><span>Joueur</span><span>But</span><span>Passe</span><span>Décisif</span><span>Cote</span></div>
     ${arr.length ? arr.slice(0, 8).map((p) => `<div class="player"><div class="pn"><b>${esc(p.name)}</b> ${p.status !== 'probable' ? `<span class="tag ${p.status === 'titulaire' ? 'win' : p.status === 'absent' ? 'lose' : ''}">${p.status}</span>` : ''}<small>${p.g} but${p.g > 1 ? 's' : ''} · ${p.a} passe${p.a > 1 ? 's' : ''} · ${p.m ?? '?'} matchs</small></div><span class="v">${pct(p.pg)}</span><span class="v">${pct(p.pa)}</span><span class="v">${pct(p.pd)}</span>${oddCell(p)}</div>`).join('') : '<div class="empty">Pas de données joueurs.</div>'}</div>`;
   const sc = m.scorers || [];
-  const odds = sc.length ? `<div class="card pad section"><h3 style="margin-top:0">Cotes buteur Bet365</h3>
+  const odds = sc.length ? `<div class="card pad section"><h3 style="margin-top:0">Cotes buteur</h3><p class="note" style="margin-top:0">Cotes Bet365 (site étranger). Les books français sont souvent ≈ 15 % plus bas sur les buteurs.</p>
     <div class="scorers"><span class="mk-head">Joueur</span><span class="mk-head" style="text-align:right">À tout moment</span><span class="mk-head" style="text-align:right">1er buteur</span><span class="mk-head" style="text-align:right">Chances</span>
     ${sc.map((s) => `<span>${esc(s.name)}</span><b style="text-align:right">${odd(s.o)}</b><span class="muted" style="text-align:right">${s.first ? odd(s.first) : '–'}</span><span class="muted" style="text-align:right">${pct(Math.min(0.95, 0.85 / s.o))}</span>`).join('')}</div>
     <p class="note">Chances = ce que la cote représente, sans la marge du bookmaker (≈15 %).</p></div>` : '<p class="note">Pas encore de cotes buteur pour ce match.</p>';
   const pLegs = m.state === 'pre' ? playerLegs(m) : [];
   const adds = pLegs.length ? `<div class="card pad section"><div class="row-between"><div class="eyebrow">Ajouter un pari joueur à mon combiné</div></div>
     ${Object.entries(PLAYER_TYPES).map(([t, d]) => { const ls = pLegs.filter((l) => l.type === t).sort((a, b) => b.p - a.p); return ls.length ? `<h3>${d.name}</h3><div class="leg-grid">${ls.map((l) => `<button class="leg-btn" data-add="${esc(l.id)}"><span>${esc(l.label.replace(' ' + d.label, ''))} <span class="muted">${pct(l.p)}</span></span><b>${odd(l.odds)}${l.est ? '≈' : ''}</b></button>`).join('')}</div>` : ''; }).join('')}
-    <p class="note">Cote buteur = Bet365 quand elle existe. Cotes passeur et décisif ≈ estimées : remplace-les par celles de Betclic dans Mon combiné.</p></div>` : '';
+    <p class="note">Cote buteur = estimation France d'après Bet365. Cotes passeur et décisif ≈ estimées : remplace-les par celles de Betclic dans Mon combiné.</p></div>` : '';
   return list(m.h, m.players.h) + list(m.a, m.players.a) + adds + odds;
 }
 
