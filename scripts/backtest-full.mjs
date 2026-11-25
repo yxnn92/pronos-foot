@@ -64,9 +64,9 @@ console.log('matchs avec cotes passées :', odds.size);
 const fair = (o) => { const inv = o.map((x) => 1 / x), s = inv.reduce((a, b) => a + b, 0); return inv.map((x) => x / s); };
 const okOdds = (o) => o && o.every((x) => x);
 function probs(lh, la) {
-  const m = scoreMatrix(Math.max(0.05, lh), Math.max(0.05, la)); let h = 0, d = 0, a = 0, o25 = 0;
-  m.forEach((r, i) => r.forEach((p, j) => { if (i > j) h += p; else if (i === j) d += p; else a += p; if (i + j > 2.5) o25 += p; }));
-  return { h, d, a, o25 };
+  const m = scoreMatrix(Math.max(0.05, lh), Math.max(0.05, la)); let h = 0, d = 0, a = 0, o25 = 0, o15 = 0, o35 = 0, o05 = 0, btts = 0;
+  m.forEach((r, i) => r.forEach((p, j) => { if (i > j) h += p; else if (i === j) d += p; else a += p; if (i + j > 2.5) o25 += p; if (i + j > 1.5) o15 += p; if (i + j > 3.5) o35 += p; if (i + j > 0.5) o05 += p; if (i > 0 && j > 0) btts += p; }));
+  return { h, d, a, o25, o15, o35, o05, btts };
 }
 function solveS(total, target) { let lo = -total + 0.1, hi = total - 0.1; for (let k = 0; k < 30; k++) { const s = (lo + hi) / 2, p = probs((total + s) / 2, (total - s) / 2); if (p.h + p.d / 2 < target) lo = s; else hi = s; } return (lo + hi) / 2; }
 const isEval = (r) => r.date >= '2025-09-01' && /^(eng|esp|ita|ger|fra)\.1$|^uefa\.(champions|europa|europa\.conf)$/.test(r.slug);
@@ -252,3 +252,25 @@ for (const [id, st] of statsSorted) {
   }
 }
 for (const k of ["0-2 %", "2-8 %", "8-15 %", "15-25 %", "25 % +"]) { const b = bins[k]; if (b) console.log(k.padEnd(8), "part manquante moy.", (100 * b.sh / b.n).toFixed(1) + " %", "· buts réels / attendus =", (b.g / b.lam).toFixed(3), "(", b.n, "équipes-matchs )"); }
+
+// ---------- 5. Calibration des paris très probables (pour « Les quasi-sûrs ») ----------
+// Probabilités comme sur le site : 10 % modèle (meilleure version) + 90 % cotes Bet365 quand elles existent.
+console.log("=== 5. Paris annoncés très probables : réussite réelle ===");
+const calRun = runs["mixf_0.6"] || runs.base;
+const cal = {};
+const addCal = (type, p, win) => { if (p < 0.7) return; const k = p >= 0.8 ? "80" : "70"; const c = (cal[type] ||= {}); const b = (c[k] ||= { n: 0, w: 0, sp: 0 }); b.n++; b.sp += p; if (win) b.w++; };
+for (const { r, p: p0 } of calRun) {
+  let p = { ...p0 };
+  const o = odds.get(r.id);
+  if (o && okOdds(o.b365)) { const [mh, md, ma] = fair(o.b365); p.h = 0.1 * p0.h + 0.9 * mh; p.d = 0.1 * p0.d + 0.9 * md; p.a = 0.1 * p0.a + 0.9 * ma; }
+  if (o && okOdds(o.ouAvg)) { const [mo] = fair(o.ouAvg); p.o25 = 0.1 * p0.o25 + 0.9 * mo; }
+  const res = r.hs > r.as ? "h" : r.hs === r.as ? "d" : "a", tot = r.hs + r.as;
+  const best = ["h", "d", "a"].reduce((x, y) => (p[y] > p[x] ? y : x)); addCal("1N2", p[best], best === res);
+  const dc = { "1N": p.h + p.d, "N2": p.d + p.a, "12": p.h + p.a }; const dk = Object.keys(dc).reduce((x, y) => (dc[y] > dc[x] ? y : x));
+  addCal("DC", dc[dk], (dk === "1N" && res !== "a") || (dk === "N2" && res !== "h") || (dk === "12" && res !== "d"));
+  for (const [L, key] of [[0.5, "o05"], [1.5, "o15"], [2.5, "o25"], [3.5, "o35"]]) { const po = p[key]; if (po >= 0.5) addCal("Buts", po, tot > L); else addCal("Buts", 1 - po, tot < L); }
+  addCal("BTTS", Math.max(p.btts, 1 - p.btts), p.btts >= 0.5 ? r.hs > 0 && r.as > 0 : !(r.hs > 0 && r.as > 0));
+}
+const calOut = {};
+for (const [t, c] of Object.entries(cal)) { calOut[t] = {}; for (const [k, b] of Object.entries(c)) { calOut[t][k] = { n: b.n, announced: +(b.sp / b.n).toFixed(3), real: +(b.w / b.n).toFixed(3) }; console.log(t.padEnd(5), k + " %+", "annoncé", (100 * b.sp / b.n).toFixed(1) + " %", "→ réel", (100 * b.w / b.n).toFixed(1) + " %", "(", b.n, ")"); } }
+fs.writeFileSync(path.join(ROOT, "data", "calibration.json"), JSON.stringify({ updatedAt: new Date().toISOString(), matches: calRun.length, from: "2025-09-01", bins: calOut }));

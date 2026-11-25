@@ -425,3 +425,10 @@ input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border-radius: 
 .sheet { touch-action: pan-y; overscroll-behavior: contain; }
 .ev.sub { font-size: 12px; opacity: .8; padding: 4px 0; }
 .ev.sub .ev-ico { font-size: 12px; }
+
+/* Quasi-sûrs et combiné du jour */
+.sure-list { overflow: hidden; }
+.mini.sure { grid-template-columns: 52px 1fr auto; }
+.sure-p { font-size: 16px; color: var(--win); }
+.daily { border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); margin: 12px 0 4px; }
+.daily .leg { cursor: pointer; }

@@ -5,7 +5,7 @@ const view = $('#view');
 const TZ = 'Europe/Paris';
 const ESPN = 'https://site.api.espn.com/apis/site/v2/sports/soccer';
 const state = { tab: 'matchs', day: null, comp: 'all', valueOnly: false, q: '', standing: null, stView: 'table', pSort: 'pd', pComp: 'all', pValue: false };
-let M = null, S = null, HIST = null, loadedAt = 0, modalDraw = null, modalId = null;
+let M = null, S = null, HIST = null, COMBOS = {}, CAL = null, loadedAt = 0, modalDraw = null, modalId = null;
 
 // ---------- formats ----------
 const fmt = (opts) => new Intl.DateTimeFormat('fr-FR', { timeZone: TZ, ...opts });
@@ -38,8 +38,8 @@ const debounce = (f, ms) => { let t; return (...a) => { clearTimeout(t); t = set
 // ---------- chargement ----------
 async function load() {
   const get = (f) => fetch(`data/${f}?v=${Math.floor(Date.now() / 6e4)}`).then((r) => r.json());
-  const [m, s, h] = await Promise.all([get('matches.json'), get('standings.json'), get('history.json')]);
-  M = m; S = s; HIST = h; loadedAt = Date.now();
+  const [m, s, h, c, cal] = await Promise.all([get('matches.json'), get('standings.json'), get('history.json'), get('combos.json').catch(() => ({})), get('calibration.json').catch(() => null)]);
+  M = m; S = s; HIST = h; COMBOS = c || {}; CAL = cal; loadedAt = Date.now();
   const upd = new Date(M.updatedAt);
   $('#updated').textContent = `Pronos mis à jour ${fDayShort.format(upd)} à ${fTime.format(upd)}`;
   render();
@@ -202,6 +202,61 @@ function surpriseHtml(s) {
   </div>`;
 }
 
+// ---------- Quasi-sûrs : paris annoncés à 80 % ou plus ----------
+const SURE_TYPES = { '1N2': 'Résultat', DC: 'Double chance', Buts: 'Buts' };
+function surePicks(m) {
+  return allLegs(m).filter((l) => SURE_TYPES[l.type] && l.p >= 0.8 && l.odds >= 1.04)
+    .sort((a, b) => b.p - a.p).slice(0, 2); // au plus 2 par match (les plus sûrs)
+}
+const calText = (type) => { const b = CAL?.bins?.[type]?.['80']; return b ? `(passé ${Math.round(b.real * 100)} %)` : ''; };
+function surePicksHtml(max = 8, days = 2) {
+  const lim = Date.now() + days * 864e5;
+  const list = M.matches.filter((m) => isPre(m) && Date.parse(m.date) < lim).flatMap((m) => surePicks(m).map((l) => ({ ...l, m })))
+    .sort((a, b) => b.p - a.p).slice(0, max);
+  if (!list.length) return '';
+  const hist = Object.keys(SURE_TYPES).map((t) => SURE_TYPES[t] + ' ' + (CAL?.bins?.[t]?.['80'] ? Math.round(CAL.bins[t]['80'].real * 100) + ' %' : '?')).join(' · ');
+  let html = '<h2>✅ Les quasi-sûrs</h2><p class="note">Paris annoncés à 80 % ou plus (48 h). Sur les saisons passées, ils sont réellement passés : ' + hist + '. Cotes basses : à combiner plutôt qu\'à jouer seuls.</p><div class="card sure-list">';
+  for (const l of list) {
+    html += '<div class="mini sure" data-id="' + l.m.id + '"><div class="t">' + fTime.format(new Date(l.m.date)) + '<br><span class="small muted">' + fWd.format(new Date(l.m.date)).replace('.', '') + '</span></div>'
+      + '<div style="min-width:0"><div class="small muted" style="display:flex;gap:6px;align-items:center">' + img(l.m.h.logo, 'logo', 'width:14px;height:14px') + esc(l.match) + ' · ' + esc(comp(l.m.slug).short) + '</div><b>' + esc(l.label) + '</b> <span class="small muted">' + esc(calText(l.type)) + '</span></div>'
+      + '<div style="text-align:right"><b class="sure-p">' + pctN(l.p) + ' %</b><div class="small muted">' + odd(l.odds) + (l.est ? '≈' : '') + '</div></div></div>';
+  }
+  return html + '</div>';
+}
+
+// ---------- Combiné du jour (choisi et suivi par le serveur) ----------
+function currentCombo() {
+  const days = Object.keys(COMBOS).sort(), t = todayKey();
+  return COMBOS[t] || COMBOS[days.find((d) => d > t)] || COMBOS[days[days.length - 1]] || null;
+}
+function dailyComboHtml() {
+  const c = currentCombo(); if (!c) return '';
+  const legState = (l) => {
+    const m = M.matches.find((x) => x.id === l.mid);
+    if (l.win === true) return '<span class="tag win">✓ ' + esc(l.score || '') + '</span>';
+    if (l.win === false) return '<span class="tag lose">✗ ' + esc(l.score || '') + '</span>';
+    if (m && m.state === 'in' && m.hs != null) { const w = gradePick(l, m.hs, m.as); return '<span class="tag ' + (w ? 'win' : 'lose') + '">● ' + m.hs + '-' + m.as + '</span>'; }
+    return '<span class="o">' + odd(l.odds) + (l.est ? '≈' : '') + '</span>';
+  };
+  const status = c.result ? (c.result.void ? '<span class="tag">Annulé (prolongation / report)</span>' : c.result.win ? '<span class="tag win">✓ Combiné gagné</span>' : '<span class="tag lose">✗ Combiné perdu</span>') : '';
+  const when = c.day === todayKey() ? "aujourd'hui" : fDay.format(noon(c.day));
+  const ids = c.legs.map((l) => l.mid + '|' + l.type + '|' + l.key).join(',');
+  return '<div class="card combo daily"><div class="row-between"><div><div class="eyebrow">🎯 Combiné du jour · ' + when + '</div><div class="combo-total">' + odd(c.odds) + '</div></div>'
+    + '<div class="ring" style="--p:' + Math.round(c.p * 100) + ';background:conic-gradient(var(--accent) calc(var(--p)*1%),var(--surface-3) 0)"><span style="background:var(--surface);color:var(--text)">' + pctN(c.p) + '%</span></div></div>'
+    + '<div class="combo-legs">' + c.legs.map((l) => '<div class="leg" data-id="' + l.mid + '"><div style="min-width:0"><small>' + esc(l.match) + ' · ' + fTime.format(new Date(l.date)) + '</small><b>' + esc(l.label) + '</b> <span class="small muted">' + pct(l.p) + '</span></div>' + legState(l) + '</div>').join('') + '</div>'
+    + '<div class="row-between">' + (status || '<span class="small muted">Le plus probable pour une cote ≈ 2. Figé au 1er coup d\'envoi, suivi dans Performance.</span>')
+    + (!c.result ? '<button class="btn-sm" data-addall="' + esc(ids) + '">+ Mon combiné</button>' : '') + '</div></div>';
+}
+function comboPerfHtml() {
+  const done = Object.values(COMBOS).filter((c) => c.result && !c.result.void);
+  if (!done.length) return '<div class="card pad section"><div class="eyebrow">🎯 Combiné du jour</div><p class="small muted" style="margin:6px 0 0">Suivi en cours : ' + Object.keys(COMBOS).length + ' combiné(s) proposé(s), pas encore de résultat.</p></div>';
+  const w = done.filter((c) => c.result.win).length, profit = done.reduce((t, c) => t + (c.result.win ? c.odds - 1 : -1), 0);
+  const avgP = done.reduce((t, c) => t + c.p, 0) / done.length;
+  return '<div class="card pad section"><div class="eyebrow">🎯 Combiné du jour</div><div class="kpis" style="margin-top:10px">'
+    + '<div class="kpi" style="padding:0"><div><div class="v">' + w + '/' + done.length + '</div><div class="l">passés (' + pct(w / done.length) + ') · annoncé en moyenne ' + pct(avgP) + '</div></div></div>'
+    + '<div class="kpi" style="padding:0"><div><div class="v ' + (profit >= 0 ? 'up' : 'down') + '">' + (profit >= 0 ? '+' : '') + profit.toFixed(1) + ' u</div><div class="l">gains fictifs (1 unité par combiné)</div></div></div></div></div>';
+}
+
 // ---------- onglet Matchs ----------
 function renderMatchs() {
   const days = [...new Set(M.matches.map((m) => dayKey(m.date)))].sort();
@@ -212,7 +267,7 @@ function renderMatchs() {
   let list = M.matches.filter((m) => dayKey(m.date) === state.day);
   if (state.q) list = M.matches.filter((m) => matchText(m).includes(state.q.toLowerCase()));
   if (state.comp !== 'all') list = list.filter((m) => m.slug === state.comp);
-  if (state.valueOnly) list = list.filter((m) => values(m).length);
+  if (state.valueOnly) list = list.filter((m) => isPre(m) && surePicks(m).length);
   const live = M.matches.filter((m) => m.state === 'in');
   const motd = matchOfDay();
   const dayCombos = combos(M.matches.filter((m) => dayKey(m.date) === state.day));
@@ -230,12 +285,13 @@ function renderMatchs() {
       </div>
       <div class="hero-foot"><span class="pick">${esc(mp.label)}${mp.odds ? ' · ' + odd(mp.odds) : ''}</span>${conf(mp.stars)}<div class="ring" style="--p:${pctN(mp.p)}"><span>${pctN(mp.p)}%</span></div></div>
     </div>` : ''}
+    ${!state.q ? dailyComboHtml() + surePicksHtml(8) : ''}
     ${live.length && !state.q ? `<h2><i class="dot-live"></i> En direct</h2><div class="mlist">${live.map(matchCard).join('')}</div>` : ''}
     <div class="filters">
       <div class="days">${days.map((d) => `<button class="day ${d === state.day && !state.q ? 'active' : ''}" data-day="${d}"><small>${wd(d)}</small><b>${noon(d).getUTCDate()}</b><span class="n">${count(d)} m.</span></button>`).join('')}</div>
       <div class="searchbox"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input type="search" id="q" placeholder="Rechercher une équipe" value="${esc(state.q)}"></div>
       <select id="comp"><option value="all">Toutes les compétitions</option>${comps.map((c) => `<option value="${c}" ${c === state.comp ? 'selected' : ''}>${esc(comp(c).name)}</option>`).join('')}</select>
-      <label class="toggle"><input type="checkbox" id="vOnly" ${state.valueOnly ? 'checked' : ''}> Value bets</label>
+      <label class="toggle"><input type="checkbox" id="vOnly" ${state.valueOnly ? 'checked' : ''}> ✅ Quasi-sûrs</label>
     </div>
     ${state.q ? `<p class="note">Résultats pour « ${esc(state.q)} » sur les ${days.length} jours affichés.</p>` : ''}
     ${list.length ? groupByComp(list).map(([slug, ms]) => compHead(slug, ms.length) + `<div class="mlist">${ms.map(matchCard).join('')}</div>`).join('') : '<div class="card empty">Aucun match pour ce choix.</div>'}
@@ -438,6 +494,7 @@ function renderCombis() {
 
   view.innerHTML = `
     <h2>🎯 Combinés</h2>
+    ${dailyComboHtml(true)}
     <div class="card pad gen">
       <div class="eyebrow">Générateur de combiné</div>
       <div class="filters" style="margin-top:10px"><div class="chips">${scopes.map(([k, l]) => `<button class="chip ${cState.scope === k ? 'active' : ''}" data-scope="${k}">${l}</button>`).join('')}</div></div>
@@ -508,8 +565,7 @@ function renderJoueurs() {
     <h2>⚽ Joueurs décisifs</h2>
     <p class="note">Matchs des 3 prochains jours. Chances calculées à partir des buts et passes du joueur dans la compétition et des buts attendus de son équipe, mélangées à la cote buteur du marché.</p>
     <div class="filters"><div class="segmented">${seg('pd', 'Décisif')}${seg('pg', 'Buteur')}${seg('pa', 'Passeur')}</div>
-      <select id="pComp"><option value="all">Toutes les compétitions</option>${comps.map((c) => `<option value="${c}" ${c === state.pComp ? 'selected' : ''}>${esc(comp(c).name)}</option>`).join('')}</select>
-      <label class="toggle"><input type="checkbox" id="pValue" ${state.pValue ? 'checked' : ''}> Value buteur</label></div>
+      <select id="pComp"><option value="all">Toutes les compétitions</option>${comps.map((c) => `<option value="${c}" ${c === state.pComp ? 'selected' : ''}>${esc(comp(c).name)}</option>`).join('')}</select></div>
     <div class="card" style="overflow:hidden">
       <div class="player headrow"><span>Joueur</span><span class="${state.pSort === 'pg' ? 'sort-active' : ''}">But</span><span class="${state.pSort === 'pa' ? 'sort-active' : ''}">Passe</span><span class="${state.pSort === 'pd' ? 'sort-active' : ''}">Décisif</span><span>Cote</span></div>
       ${rows.slice(0, 60).map((r) => `<div class="player mc" data-id="${r.match.id}" style="border-radius:0;box-shadow:none;border-width:0 0 1px">
@@ -518,10 +574,9 @@ function renderJoueurs() {
         <span class="v">${pct(r.pg)}</span><span class="v">${pct(r.pa)}</span><span class="v">${pct(r.pd)}</span>${oddCell(r)}
       </div>`).join('') || `<div class="empty">${state.pValue ? 'Aucun value buteur pour le moment.' : 'Pas de données joueurs pour le moment.'}</div>`}
     </div>
-    <p class="note">Cote = buteur à tout moment, <b>estimation France</b> (≈ Betclic), calculée d'après Bet365. ◆ = value buteur (nos chances × cote ≥ 1,10, buteurs réguliers uniquement). Pas de cotes passeur chez ESPN.</p>`;
+    <p class="note">Cote = buteur à tout moment, <b>estimation France</b> (≈ Betclic), calculée d'après Bet365. Pas de cotes passeur chez ESPN.</p>`;
   view.querySelectorAll('[data-sort]').forEach((b) => b.onclick = () => { state.pSort = b.dataset.sort; render(); });
   $('#pComp').onchange = (e) => { state.pComp = e.target.value; render(); };
-  $('#pValue').onchange = (e) => { state.pValue = e.target.checked; render(); };
 }
 
 // ---------- onglet Classements (+ buteurs / passeurs) ----------
@@ -568,7 +623,7 @@ function renderPerf() {
   const picks = done.flatMap((h) => h.picks.filter((p) => p.win != null).map((p) => ({ ...p, h })));
   const pending = Object.values(HIST).filter((h) => !h.result).length;
   if (!picks.length) {
-    view.innerHTML = `<h2>📈 Performance</h2><div class="card pad empty"><div style="font-size:36px">⏳</div><b>Le suivi démarre</b><br>Pas encore de match terminé avec un prono enregistré avant le coup d'envoi.<br>${pending} pronos attendent leur résultat.</div>`;
+    view.innerHTML = `<h2>📈 Performance</h2>${comboPerfHtml()}<div class="card pad empty"><div style="font-size:36px">⏳</div><b>Le suivi démarre</b><br>Pas encore de match terminé avec un prono enregistré avant le coup d'envoi.<br>${pending} pronos attendent leur résultat.</div>`;
     return;
   }
   const agg = (arr) => { const n = arr.length, w = arr.filter((p) => p.win).length; return { n, w, r: n ? w / n : 0 }; };
@@ -590,6 +645,7 @@ function renderPerf() {
       ${kpi(`<span class="${pr.s >= 0 ? 'up' : 'down'}">${pr.s >= 0 ? '+' : ''}${pr.s.toFixed(1)} u</span>`, `Gains fictifs · ROI ${pr.roi >= 0 ? '+' : ''}${(pr.roi * 100).toFixed(1)} %`)}
       ${kpi(done.length, `Matchs suivis · ${pending} en attente`)}
     </div>
+    ${comboPerfHtml()}
     ${table('Par type de prono', rowsBy((p) => p.type, (k) => TYPE_NAMES[k] || k), 'Type')}
     ${table('Par niveau de confiance', rowsBy((p) => p.stars, (k) => conf(+k), (a, b) => b[0] - a[0]), 'Confiance')}
     ${table('Par compétition', rowsBy((p) => p.h.slug, (k) => esc(comp(k).name)), 'Compétition')}
@@ -902,7 +958,11 @@ function render() {
   updateMyCount();
 }
 $('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; state.tab = b.dataset.tab; render(); window.scrollTo({ top: 0 }); };
-view.addEventListener('click', (e) => { const c = e.target.closest('[data-id]'); if (c && !e.target.closest('input,select,button,label')) openMatch(c.dataset.id); });
+view.addEventListener('click', (e) => {
+  // bouton « + Mon combiné » du combiné du jour (onglet Matchs ; l'onglet Combinés gère le sien)
+  const add = e.target.closest('[data-addall]');
+  if (add && state.tab !== 'combis') { const ids = add.dataset.addall.split(','); ids.forEach((id) => addLeg(id, true)); toast(`${ids.length} paris ajoutés à ton combiné`); updateMyCount(); return; }
+  const c = e.target.closest('[data-id]'); if (c && !e.target.closest('input,select,button,label')) openMatch(c.dataset.id); });
 $('#closeModal').onclick = () => closeModal();
 $('#modalBody').addEventListener('click', (e) => { const b = e.target.closest('[data-add]'); if (b) { addLeg(b.dataset.add); b.classList.add('added'); } });
 $('#modal').onclick = (e) => { if (e.target.id === 'modal') closeModal(); };

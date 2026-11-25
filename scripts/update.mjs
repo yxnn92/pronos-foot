@@ -278,6 +278,33 @@ function absenceImpact(teamId, leaders, lineup, absents, teamStats) {
 }
 
 const de = (n) => (/^[aeiouyhéèâî]/i.test(n) ? `d'${n}` : `de ${n}`);
+// ---------- combiné du jour ----------
+// Le plus probable possible pour une cote totale entre 1,85 et 2,50 (cotes France estimées),
+// 2 à 4 paris sur des matchs différents, parmi 1N2 / double chance / buts.
+function dailyCombo(ms) {
+  const legs = [];
+  for (const m of ms) {
+    const cands = m.picks.filter((p) => ['1N2', 'DC', 'Buts'].includes(p.type) && p.odds && p.odds >= 1.12 && p.p >= 0.55)
+      .sort((a, b) => b.p - a.p).slice(0, 2);
+    for (const p of cands) legs.push({ mid: m.id, type: p.type, key: p.key, label: p.label, p: p.p, odds: p.odds, est: !!p.est, match: `${m.h.short} - ${m.a.short}`, date: m.date, slug: m.slug });
+  }
+  legs.sort((a, b) => b.p - a.p);
+  const L = legs.slice(0, 24);
+  let best = null;
+  const rec = (start, chosen, o, p) => {
+    if (chosen.length >= 2 && o >= 1.85 && o <= 2.5 && (!best || p > best.p)) best = { legs: [...chosen], odds: o, p };
+    if (chosen.length === 4 || o > 2.5) return;
+    for (let i = start; i < L.length; i++) {
+      if (chosen.some((c) => c.mid === L[i].mid)) continue;
+      chosen.push(L[i]); rec(i + 1, chosen, o * L[i].odds, p * L[i].p); chosen.pop();
+    }
+  };
+  rec(0, [], 1, 1);
+  if (!best) return null;
+  best.legs.sort((a, b) => a.date.localeCompare(b.date));
+  return { legs: best.legs, odds: r2(best.odds), p: r3(best.p) };
+}
+
 // ---------- séries et tendances (toutes compétitions, du plus récent au plus ancien) ----------
 function teamTrends(team, hist, venue) {
   const n = team.short, out = [];
@@ -602,6 +629,32 @@ async function main() {
       if (!e || !e.completed) h.result = { void: true, note: 'Match reporté ou annulé' };
     }
   }
+
+  // ---------- Combiné du jour : choisi par le serveur, figé au 1er coup d'envoi, puis corrigé ----------
+  const combos = await readJSON(path.join(DATA, 'combos.json'), {});
+  const parisDay = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris' }).format(new Date(d));
+  const upcoming = matches.filter((m) => m.state === 'pre' && Date.parse(m.date) > NOW + 10 * 60e3);
+  let day = parisDay(NOW), dayMs = upcoming.filter((m) => parisDay(m.date) === day);
+  if (dayMs.length < 2) { day = [...new Set(upcoming.map((m) => parisDay(m.date)))].sort().find((d) => upcoming.filter((m) => parisDay(m.date) === d).length >= 2); dayMs = upcoming.filter((m) => parisDay(m.date) === day); }
+  const locked = (c) => c.legs.some((l) => { const m = matches.find((x) => x.id === l.mid); return !m || m.state !== 'pre' || Date.parse(m.date) <= NOW; });
+  if (day && dayMs.length >= 2 && !(combos[day] && locked(combos[day]))) {
+    const c = dailyCombo(dayMs);
+    if (c) combos[day] = { day, ...c, createdAt: new Date(NOW).toISOString() };
+  }
+  for (const c of Object.values(combos)) {
+    if (c.result) continue;
+    let pending = false, lost = false, voided = false;
+    for (const l of c.legs) {
+      const e = byId.get(l.mid);
+      if (!e?.completed) { if (e && NOW - Date.parse(e.date) > 3 * D) voided = true; pending = true; continue; }
+      if (/AET|PEN/i.test(e.status || '')) { voided = true; continue; }
+      l.win = grade(l, e.hs, e.as); l.score = `${e.hs}-${e.as}`;
+      if (!l.win) lost = true;
+    }
+    if (lost) c.result = { win: false };
+    else if (!pending) c.result = voided ? { void: true } : { win: true };
+  }
+  await writeJSON(path.join(DATA, 'combos.json'), combos);
 
   log('Classements…');
   const standings = (await pool(STANDINGS, 3, loadStandings)).filter(Boolean);
