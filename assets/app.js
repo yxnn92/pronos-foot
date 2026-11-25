@@ -137,8 +137,10 @@ function matchCard(m) {
       ${verdictTag(v)}
       ${m.result?.void ? `<span class="tag">${esc(m.result.note)}</span>` : ''}
     </div>
+    ${m.state === 'pre' && m.trends?.length ? `<div class="mc-trend">${TREND_ICON[m.trends[0].kind] || '📊'} ${esc(m.trends[0].text)}</div>` : ''}
   </article>`;
 }
+const TREND_ICON = { up: '📈', down: '📉', goals: '⚽', nogoals: '🧱' };
 
 function groupByComp(list) {
   const order = Object.keys(M.comps);
@@ -599,28 +601,120 @@ function renderPerf() {
 // ---------- fiche match ----------
 function openMatch(id) {
   const m = M.matches.find((x) => x.id === id); if (!m) return;
-  let sub = 'pronos';
+  // match en cours ou terminé : on ouvre directement le fil du match
+  let sub = m.state === 'pre' ? 'pronos' : 'direct';
   const body = $('#modalBody');
   modalId = id;
   modalDraw = () => {
     const cur = M.matches.find((x) => x.id === id);
+    const tabs = [...(cur.state !== 'pre' ? [['direct', cur.state === 'in' ? '● Direct' : 'Résumé']] : []), ['pronos', 'Pronos'], ['fiche', 'Stats'], ['compos', 'Compos'], ['joueurs', 'Joueurs']];
     body.innerHTML = `
       <div class="fiche-head">
         <div class="comp">${img(comp(cur.slug).logo, '')} ${esc(comp(cur.slug).name)} · ${fDay.format(new Date(cur.date))}</div>
         <div class="fiche-teams"><div class="t"><span class="crest">${img(cur.h.logo, '')}</span>${esc(cur.h.short)}</div><div class="mid">${bigScore(cur)}</div><div class="t"><span class="crest">${img(cur.a.logo, '')}</span>${esc(cur.a.short)}</div></div>
+        ${cur._live?.scorers ? `<div class="head-goals"><div>${cur._live.scorers.h.map(esc).join('<br>')}</div><div>${cur._live.scorers.a.map(esc).join('<br>')}</div></div>` : ''}
       </div>
       <div class="fiche-body">
-        <div class="subtabs">${[['pronos', 'Pronos'], ['fiche', 'Stats'], ['compos', 'Compos'], ['joueurs', 'Joueurs']].map(([k, l]) => `<button data-sub="${k}" class="${k === sub ? 'active' : ''}">${l}</button>`).join('')}</div>
-        <div>${({ pronos: fichePronos, fiche: ficheStats, compos: ficheCompos, joueurs: fichePlayers })[sub](cur)}</div>
+        <div class="subtabs">${tabs.map(([k, l]) => `<button data-sub="${k}" class="${k === sub ? 'active' : ''}">${l}</button>`).join('')}</div>
+        <div>${({ direct: ficheLive, pronos: fichePronos, fiche: ficheStats, compos: ficheCompos, joueurs: fichePlayers })[sub](cur)}</div>
       </div>`;
     body.querySelectorAll('[data-sub]').forEach((b) => b.onclick = () => { sub = b.dataset.sub; modalDraw(); });
     if (sub === 'compos') maybeFetchLineup(cur);
+    if (sub === 'direct') fetchLive(cur);
   };
   modalDraw();
-  $('#modal').hidden = false; document.body.style.overflow = 'hidden';
-  $('.sheet').scrollTop = 0;
+  const modal = $('#modal');
+  modal.hidden = false; document.body.style.overflow = 'hidden';
+  $('.sheet').scrollTop = 0; $('.sheet').style.transform = '';
+  // bouton « retour » du téléphone : ferme la fiche au lieu de quitter l'appli
+  try { history.pushState({ fiche: id }, ''); } catch (e) {}
 }
-function closeModal() { $('#modal').hidden = true; document.body.style.overflow = ''; modalDraw = null; modalId = null; }
+function closeModal(fromHistory) {
+  const modal = $('#modal'); if (modal.hidden) return;
+  modal.hidden = true; document.body.style.overflow = ''; modalDraw = null; modalId = null;
+  $('.sheet').style.transform = '';
+  if (!fromHistory && history.state?.fiche) try { history.back(); } catch (e) {}
+}
+window.addEventListener('popstate', () => closeModal(true));
+
+// ---------- fermer la fiche en la glissant vers le bas (comme sur iPhone) ----------
+(() => {
+  const sheet = $('.sheet'); let y0 = null, dy = 0, t0 = 0, dragging = false;
+  sheet.addEventListener('touchstart', (e) => {
+    // on ne commence à tirer que si la fiche est tout en haut (sinon c'est un défilement normal)
+    if (sheet.scrollTop > 0 || e.touches.length > 1) { y0 = null; return; }
+    y0 = e.touches[0].clientY; dy = 0; t0 = Date.now(); dragging = false;
+  }, { passive: true });
+  sheet.addEventListener('touchmove', (e) => {
+    if (y0 == null) return;
+    dy = e.touches[0].clientY - y0;
+    if (dy > 6 && sheet.scrollTop <= 0) {
+      dragging = true; e.preventDefault();
+      sheet.style.transition = 'none';
+      sheet.style.transform = `translateY(${dy}px)`;
+      $('#modal').style.background = `rgba(2, 6, 23, ${Math.max(0, 0.55 - dy / 900)})`;
+    } else if (dy < 0) { y0 = null; }
+  }, { passive: false });
+  sheet.addEventListener('touchend', () => {
+    if (y0 == null || !dragging) { y0 = null; return; }
+    const fast = dy / Math.max(1, Date.now() - t0) > 0.6;
+    sheet.style.transition = 'transform .22s ease-out';
+    $('#modal').style.background = '';
+    if (dy > 120 || (fast && dy > 40)) {
+      sheet.style.transform = 'translateY(100%)';
+      setTimeout(() => { sheet.style.transition = ''; closeModal(); }, 200);
+    } else sheet.style.transform = '';
+    y0 = null; dragging = false;
+  });
+})();
+
+// ---------- fil du match (temps forts + stats), lu en direct chez ESPN ----------
+const EV = {
+  goal: '⚽', 'goal---header': '⚽', 'goal---free-kick': '⚽', 'goal---volley': '⚽', 'penalty---scored': '⚽', 'own-goal': '⚽',
+  'yellow-card': '🟨', 'red-card': '🟥', 'yellow-red-card': '🟥', substitution: '🔁', 'penalty---missed': '❌', 'penalty---saved': '🧤', halftime: '⏸️', 'end-regular-time': '🏁',
+};
+const EV_FR = { substitution: 'Remplacement', halftime: 'Mi-temps', 'end-regular-time': 'Fin du temps réglementaire', 'yellow-card': 'Carton jaune', 'red-card': 'Carton rouge', 'yellow-red-card': '2e jaune → rouge', 'own-goal': 'But contre son camp', 'penalty---scored': 'Penalty marqué', 'penalty---missed': 'Penalty manqué', 'penalty---saved': 'Penalty arrêté' };
+const STATS_FR = [['possessionPct', 'Possession', '%'], ['totalShots', 'Tirs'], ['shotsOnTarget', 'Tirs cadrés'], ['wonCorners', 'Corners'], ['foulsCommitted', 'Fautes'], ['yellowCards', 'Cartons jaunes'], ['redCards', 'Cartons rouges'], ['offsides', 'Hors-jeu'], ['saves', 'Arrêts'], ['totalPasses', 'Passes'], ['passPct', 'Passes réussies', 'pct']];
+async function fetchLive(m) {
+  if (m._liveBusy || (m._live && Date.now() - m._live.ts < 25e3)) return;
+  m._liveBusy = true;
+  try {
+    const s = await fetch(`${ESPN}/${m.slug}/summary?event=${m.id}`).then((r) => r.json());
+    const events = (s.keyEvents || []).filter((k) => EV[k.type?.type] || /goal/.test(k.type?.type || '')).map((k) => ({
+      type: k.type?.type, clock: k.clock?.displayValue || '', side: k.team?.id === m.h.id ? 'h' : k.team?.id === m.a.id ? 'a' : '',
+      who: (k.participants || []).map((p) => p.athlete?.displayName).filter(Boolean), goal: !!k.scoringPlay || /goal|penalty---scored/.test(k.type?.type || ''),
+    }));
+    const stats = {};
+    for (const t of s.boxscore?.teams || []) { const side = t.team?.id === m.h.id ? 'h' : 'a'; for (const x of t.statistics || []) (stats[x.name] ||= {})[side] = parseFloat(x.displayValue); }
+    const scorers = { h: [], a: [] };
+    for (const e of events) if (e.goal && e.side && e.who[0]) scorers[e.type === 'own-goal' ? (e.side === 'h' ? 'a' : 'h') : e.side].push(`${e.who[0]} ${e.clock}${e.type === 'own-goal' ? ' (csc)' : e.type === 'penalty---scored' ? ' (pen.)' : ''}`);
+    m._live = { ts: Date.now(), events: events.reverse(), stats, scorers };
+  } catch (e) { m._live = m._live || { ts: Date.now(), error: true, events: [], stats: {}, scorers: null }; }
+  m._liveBusy = false;
+  if (modalId === m.id && modalDraw) { const sh = $('.sheet'), top = sh.scrollTop; modalDraw(); sh.scrollTop = top; }
+}
+function ficheLive(m) {
+  const L = m._live;
+  if (!L) return '<div class="card pad empty"><div class="spinner"></div>Chargement du match…</div>';
+  const statRow = ([k, label, unit]) => {
+    const s = L.stats[k]; if (!s || (s.h == null && s.a == null)) return '';
+    let h = s.h || 0, a = s.a || 0; if (unit === 'pct') { h = Math.round(h * 100); a = Math.round(a * 100); }
+    const tot = h + a || 1, suf = unit ? ' %' : '';
+    return `<div class="st-row"><div class="st-v ${h > a ? 'lead' : ''}">${h}${suf}</div><div class="st-mid"><div class="st-lab">${label}</div><div class="st-bar"><i style="width:${(h / tot) * 100}%"></i><i style="width:${(a / tot) * 100}%"></i></div></div><div class="st-v ${a > h ? 'lead' : ''}">${a}${suf}</div></div>`;
+  };
+  const evRow = (e) => {
+    const icon = e.goal ? '⚽' : EV[e.type] || '•';
+    const label = e.goal && e.type !== 'own-goal' ? `<b>${esc(e.who[0] || 'But')}</b>${e.who[1] ? ` <span class="muted small">passe : ${esc(e.who[1])}</span>` : ''}${e.type === 'penalty---scored' ? ' <span class="muted small">(penalty)</span>' : ''}` : e.type === 'substitution' && e.who.length >= 2 ? `<span class="up">↑ ${esc(e.who[0])}</span> <span class="down">↓ ${esc(e.who[1])}</span>` : `<b>${esc(e.who.join(', ') || EV_FR[e.type] || '')}</b>${e.who.length && EV_FR[e.type] && !e.goal ? ` <span class="muted small">${esc(EV_FR[e.type])}</span>` : e.goal && e.type !== 'goal' && EV_FR[e.type] ? ` <span class="muted small">${esc(EV_FR[e.type])}</span>` : ''}`;
+    if (!e.side) return `<div class="ev-mid">${icon} ${label}${e.clock ? ` · ${esc(e.clock)}` : ''}</div>`;
+    return `<div class="ev ${e.side} ${e.goal ? 'goal' : ''} ${e.type === 'substitution' ? 'sub' : ''}"><span class="ev-clock">${esc(e.clock)}</span><span class="ev-ico">${icon}</span><span class="ev-txt">${label}</span></div>`;
+  };
+  const statsHtml = STATS_FR.map(statRow).join('');
+  return `${m.state === 'in' ? '<p class="note"><i class="dot-live"></i> Mis à jour automatiquement toutes les 30 secondes.</p>' : ''}
+    <div class="card pad section"><h3 style="margin-top:0">Temps forts</h3>
+      <div class="ev-head"><span>${img(m.h.logo, 'logo', 'width:18px;height:18px')} ${esc(m.h.short)}</span><span>${esc(m.a.short)} ${img(m.a.logo, 'logo', 'width:18px;height:18px')}</span></div>
+      ${L.events.length ? `<div class="timeline">${L.events.map(evRow).join('')}</div>` : '<div class="empty" style="padding:16px">Pas encore de temps fort.</div>'}</div>
+    ${statsHtml ? `<div class="card pad section"><h3 style="margin-top:0">Statistiques du match</h3>${statsHtml}</div>` : ''}`;
+}
 
 const mkRow = (label, p, o, extra = '', color = '') => `<div class="mk-row"><div class="lab"><span>${label}${extra}</span><div class="meter"><i style="width:${(p || 0) * 100}%;${color ? `background:${color}` : ''}"></i></div></div><span class="pct">${pct(p)}</span><span class="odd">${o ? odd(o) : ''}</span></div>`;
 function fichePronos(m) {
@@ -632,6 +726,8 @@ function fichePronos(m) {
     <div style="display:flex;align-items:center;gap:10px"><div style="text-align:right">${conf(x.stars)}<div class="small" style="margin-top:3px"><b>${pct(x.p)}</b>${x.odds ? ' · ' + odd(x.odds) + (x.est ? '≈' : '') : ''}</div>${verdictTag(verdict(m, x))}</div>${addBtn(pickId(x))}</div></div>`;
   const legs = m.state === 'pre' ? allLegs(m) : [];
   return `
+    ${m.why ? `<div class="card pad section why"><div class="eyebrow">💬 Pourquoi ce prono</div><p>${esc(m.why)}</p>
+      ${m.trends?.length ? `<div class="trends">${m.trends.map((t) => `<div class="trend ${t.kind}"><span>${TREND_ICON[t.kind] || '📊'}</span>${esc(t.text)}</div>`).join('')}</div>` : ''}</div>` : ''}
     <div class="card pad section"><div class="eyebrow">Nos pronos</div>${m.picks.map(pickLine).join('')}</div>
     ${legs.length ? `<div class="card pad section"><div class="row-between"><div class="eyebrow">Ajouter à mon combiné</div><span class="small muted">Tous les paris du match</span></div>
       <div class="leg-grid">${legs.map((l) => `<button class="leg-btn" data-add="${esc(l.id)}"><span>${esc(l.label)}</span><b>${odd(l.odds)}${l.est ? '≈' : ''}</b></button>`).join('')}</div></div>` : ''}
@@ -784,6 +880,8 @@ async function liveTick() {
   }
   const nLive = M.matches.filter((m) => m.state === 'in').length;
   const badge = $('#liveBadge'); badge.hidden = !nLive; badge.querySelector('b').textContent = nLive;
+  // fiche ouverte sur un match en cours : on rafraîchit aussi le fil du match
+  if (modalId && modalDraw && M.matches.find((x) => x.id === modalId)?.state === 'in') modalDraw();
   liveTimer = setTimeout(liveTick, cands.length ? 30e3 : 5 * 60e3);
 }
 function softRender() {
@@ -805,7 +903,7 @@ function render() {
 }
 $('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; state.tab = b.dataset.tab; render(); window.scrollTo({ top: 0 }); };
 view.addEventListener('click', (e) => { const c = e.target.closest('[data-id]'); if (c && !e.target.closest('input,select,button,label')) openMatch(c.dataset.id); });
-$('#closeModal').onclick = closeModal;
+$('#closeModal').onclick = () => closeModal();
 $('#modalBody').addEventListener('click', (e) => { const b = e.target.closest('[data-add]'); if (b) { addLeg(b.dataset.add); b.classList.add('added'); } });
 $('#modal').onclick = (e) => { if (e.target.id === 'modal') closeModal(); };
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });

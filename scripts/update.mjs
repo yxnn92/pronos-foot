@@ -274,6 +274,79 @@ function absenceImpact(teamId, leaders, lineup, absents, teamStats) {
   return { f: r3(1 - 0.5 * lost), who };
 }
 
+const de = (n) => (/^[aeiouyhéèâî]/i.test(n) ? `d'${n}` : `de ${n}`);
+// ---------- séries et tendances (toutes compétitions, du plus récent au plus ancien) ----------
+function teamTrends(team, hist, venue) {
+  const n = team.short, out = [];
+  const res = (r) => { const me = r.h.id === team.id; const f = me ? r.hs : r.as, a = me ? r.as : r.hs; return { f, a, w: f > a, d: f === a, l: f < a, home: me, tot: r.hs + r.as }; };
+  const L = hist.map(res);
+  const streak = (pred) => { let k = 0; for (const x of L) { if (pred(x)) k++; else break; } return k; };
+  const countIn = (k, pred) => L.slice(0, k).filter(pred).length;
+  const add = (score, text, kind) => out.push({ score, text, kind });
+  if (L.length < 4) return out;
+  const w = streak((x) => x.w), unb = streak((x) => !x.l), lo = streak((x) => x.l), winless = streak((x) => !x.w);
+  const sc = streak((x) => x.f > 0), cs = streak((x) => x.a === 0), noSc = countIn(5, (x) => x.f === 0);
+  const o25 = countIn(6, (x) => x.tot > 2.5), btts = countIn(6, (x) => x.f > 0 && x.a > 0);
+  if (w >= 3) add(w * 2, `${n} reste sur ${w} victoires de suite`, 'up');
+  else if (unb >= 5) add(unb * 1.4, `${n} invaincu depuis ${unb} matchs`, 'up');
+  if (lo >= 3) add(lo * 2, `${n} reste sur ${lo} défaites de suite`, 'down');
+  else if (winless >= 4) add(winless * 1.4, `${n} sans victoire depuis ${winless} matchs`, 'down');
+  if (sc >= 6) add(sc, `${n} a marqué lors de ses ${sc} derniers matchs`, 'goals');
+  if (noSc >= 3) add(noSc * 2, `${n} n'a pas marqué dans ${noSc} de ses 5 derniers matchs`, 'nogoals');
+  if (cs >= 3) add(cs * 2, `${n} n'a pas encaissé de but depuis ${cs} matchs`, 'nogoals');
+  if (o25 >= 5) add(o25 + 1, `${o25} des 6 derniers matchs ${de(n)} : plus de 2,5 buts`, 'goals');
+  if (o25 <= 1) add(6 - o25, `${6 - o25} des 6 derniers matchs ${de(n)} : moins de 2,5 buts`, 'nogoals');
+  if (btts >= 5) add(btts, `Les deux équipes ont marqué dans ${btts} des 6 derniers matchs ${de(n)}`, 'goals');
+  if (btts <= 1) add(5 - btts, `Une seule équipe (ou aucune) a marqué dans ${6 - btts} des 6 derniers matchs ${de(n)}`, 'nogoals');
+  // à domicile / à l'extérieur
+  const V = L.filter((x) => x.home === (venue === 'h')).slice(0, 8);
+  const vs = (pred) => { let k = 0; for (const x of V) { if (pred(x)) k++; else break; } return k; };
+  const vu = vs((x) => !x.l), vl = vs((x) => x.l), vw = vs((x) => x.w);
+  const where = venue === 'h' ? 'à domicile' : "à l'extérieur";
+  if (vw >= 4) add(vw * 1.8, `${n} a gagné ses ${vw} derniers matchs ${where}`, 'up');
+  else if (vu >= 6) add(vu * 1.2, `${n} invaincu ${where} depuis ${vu} matchs`, 'up');
+  if (vl >= 3) add(vl * 1.8, `${n} a perdu ses ${vl} derniers matchs ${where}`, 'down');
+  return out;
+}
+
+// ---------- explication du prono en une phrase ----------
+function explain(e, pr, picks, hHist, aHist, imp, h2h) {
+  const mp = picks.find((p) => p.type === '1N2');
+  const form = (hist, t) => { const l = hist.slice(0, 5).map((r) => { const me = r.h.id === t.id; const f = me ? r.hs : r.as, a = me ? r.as : r.hs; return f > a ? 'V' : f === a ? 'N' : 'D'; }); return { w: l.filter((x) => x === 'V').length, l: l.filter((x) => x === 'D').length, n: l.length }; };
+  const fh = form(hHist, e.h), fa = form(aHist, e.a);
+  const [eh, ea] = pr.elo, diff = eh - ea;
+  const reasons = [];
+  let lead;
+  if (mp.key === 'd') lead = `Match serré : le nul est l'issue la plus probable (${Math.round(mp.p * 100)} %)`;
+  else {
+    const fav = mp.key === 'h' ? e.h : e.a, opp = mp.key === 'h' ? e.a : e.h, side = mp.key;
+    const pf = Math.round(mp.p * 100);
+    lead = `${fav.short} ${pf >= 60 ? 'nettement favori' : pf >= 45 ? 'favori' : 'légèrement favori'} (${pf} %)`;
+    const d = side === 'h' ? diff : -diff;
+    if (d > 60) reasons.push(`plus fort sur la durée (note ${side === 'h' ? eh : ea} contre ${side === 'h' ? ea : eh})`);
+    else if (d < -40) reasons.push(`pourtant moins bien noté que ${opp.short} (${side === 'h' ? eh : ea} contre ${side === 'h' ? ea : eh})`);
+    const F = side === 'h' ? fh : fa, O = side === 'h' ? fa : fh;
+    if (F.n >= 4 && F.w >= 4) reasons.push(`en grande forme (${F.w} victoires sur ses ${F.n} derniers matchs)`);
+    else if (F.n >= 4 && F.l >= 3) reasons.push(`malgré une mauvaise passe (${F.l} défaites sur ${F.n})`);
+    if (O.n >= 4 && O.l >= 3) reasons.push(`${opp.short} en difficulté (${O.l} défaites sur ${O.n})`);
+    else if (O.n >= 4 && O.w >= 4) reasons.push(`face à ${opp.short}, en forme (${O.w} victoires sur ${O.n})`);
+    if (side === 'h' && !e.neutral) reasons.push('à domicile');
+    const oppImp = imp[side === 'h' ? 'a' : 'h'], myImp = imp[side];
+    if (oppImp.who.length) reasons.push(`${opp.short} privé de ${oppImp.who.slice(0, 2).map((w) => w.name).join(' et ')}`);
+    if (myImp.who.length) reasons.push(`mais sans ${myImp.who.slice(0, 2).map((w) => w.name).join(' ni ')}`);
+    if (pr.market) { const dm = pr.model[side] - pr.market[side]; if (dm > 0.08) reasons.push('notre modèle y croit plus que les bookmakers'); else if (dm < -0.08) reasons.push('les bookmakers y croient encore plus que notre modèle'); }
+  }
+  // buts
+  const xg = pr.xg[0] + pr.xg[1];
+  const goals = xg >= 3.1 ? `Match ouvert attendu (≈ ${xg.toFixed(1).replace('.', ',')} buts)` : xg <= 2.3 ? `Match plutôt fermé attendu (≈ ${xg.toFixed(1).replace('.', ',')} buts)` : '';
+  const h2 = h2h.length >= 2 ? (() => { const g = h2h.reduce((t, r) => t + r.hs + r.as, 0) / h2h.length; return g >= 3.2 ? `leurs ${h2h.length} derniers duels ont donné ${g.toFixed(1).replace('.', ',')} buts en moyenne` : ''; })() : '';
+  const val = picks.find((p) => p.type === 'Value');
+  let txt = lead + (reasons.length ? ' : ' + reasons.slice(0, 3).join(', ') : '') + '.';
+  if (goals) txt += ` ${goals}${h2 ? ', ' + h2 : ''}.`;
+  if (val) txt += ` Value repérée : ${val.label} à ${String(val.odds).replace('.', ',')}.`;
+  return txt;
+}
+
 function players(teamId, lambda, leaders, lineup, teamStats, scorers, absents = []) {
   const L = leaders?.[teamId];
   if (!L) return [];
@@ -461,6 +534,9 @@ async function main() {
       : { h: { f: 1, who: [] }, a: { f: 1, who: [] } };
     const pr = predict({ hId: e.h.id, aId: e.a.id, hName: e.h.name, aName: e.a.name, nat: e.nat, neutral: e.neutral, ratings, market: x12 ? { x12, ou: ouRaw } : null, absAdj: { h: imp.h.f, a: imp.a.f } });
     pr.abs = imp;
+    // historique de chaque équipe (toutes compétitions) avant ce match
+    const histOf = (t) => results.filter((r) => (r.h.id === t || r.a.id === t) && r.date < e.date).sort((x, y) => y.date.localeCompare(x.date)).slice(0, 40);
+    const hHist = histOf(e.h.id), aHist = histOf(e.a.id);
     const picks = buildPicks(pr, odds, { h: e.h.short, a: e.a.short });
 
     const h2h = results.filter((r) => (r.h.id === e.h.id && r.a.id === e.a.id) || (r.h.id === e.a.id && r.a.id === e.h.id))
@@ -498,6 +574,8 @@ async function main() {
       h2h, lineup: { h: sum.lineup[e.h.id] || null, a: sum.lineup[e.a.id] || null },
       players: { h: players(e.h.id, pr.xg[0], sum.leaders, sum.lineup, sh, sum.scorers, absents.h), a: players(e.a.id, pr.xg[1], sum.leaders, sum.lineup, sa, sum.scorers, absents.a) },
       absents,
+      trends: [...teamTrends(e.h, hHist, 'h'), ...teamTrends(e.a, aHist, 'a')].sort((x, y) => y.score - x.score).slice(0, 5).map(({ text, kind }) => ({ text, kind })),
+      why: explain(e, pr, picks, hHist, aHist, imp, h2h),
       // cotes buteur : estimation France (o) + cote Bet365 d'origine (raw)
       scorers: (sum.scorers || []).slice(0, 20).map((s) => ({ name: s.name, o: frScorer(s.o), first: s.first ? frScorer(s.first) : null, raw: s.o })),
       result: hist?.result || null, graded: hist?.result ? hist.picks : null,
