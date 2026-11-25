@@ -257,6 +257,18 @@ async function loadStandings(slug) {
   return { slug, groups };
 }
 
+// ---------- 6. classement des buteurs et passeurs ----------
+async function loadScorers(slug) {
+  const j = await getJSON(`https://site.web.api.espn.com/apis/site/v2/sports/soccer/${slug}/statistics`);
+  if (!j?.stats) return null;
+  const pick = (name, kind) => (j.stats.find((c) => c.name === name)?.leaders || []).slice(0, 30).map((l) => {
+    const m = /Matches:\s*(\d+)/.exec(l.displayValue || '');
+    const t = l.athlete?.team || l.team || {};
+    return { id: l.athlete?.id, name: l.athlete?.displayName, team: t.shortDisplayName || t.displayName || '', logo: t.logos?.[0]?.href || logo(t), v: Number(l.value) || 0, m: m ? +m[1] : null, kind };
+  });
+  return { slug, goals: pick('goalsLeaders', 'g'), assists: pick('assistsLeaders', 'a') };
+}
+
 // ---------- programme principal ----------
 async function main() {
   await fs.mkdir(CACHE, { recursive: true });
@@ -371,10 +383,12 @@ async function main() {
 
   log('Classements…');
   const standings = (await pool(STANDINGS, 3, loadStandings)).filter(Boolean);
+  log('Buteurs…');
+  const scorers = (await pool(STANDINGS, 3, loadScorers)).filter((x) => x && (x.goals.length || x.assists.length));
 
   await writeJSON(path.join(DATA, 'matches.json'), { updatedAt: new Date(NOW).toISOString(), comps: compInfo, matches });
   await writeJSON(path.join(DATA, 'history.json'), history);
-  await writeJSON(path.join(DATA, 'standings.json'), { updatedAt: new Date(NOW).toISOString(), comps: compInfo, tables: standings });
+  await writeJSON(path.join(DATA, 'standings.json'), { updatedAt: new Date(NOW).toISOString(), comps: compInfo, tables: standings, scorers });
   log(`Terminé : ${matches.length} matchs, ${Object.keys(history).length} pronos dans l'historique.`);
 }
 
