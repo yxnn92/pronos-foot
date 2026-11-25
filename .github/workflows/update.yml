@@ -16,17 +16,16 @@ permissions:
   contents: write
   pages: write
   id-token: write
+  actions: read
 
 concurrency:
   group: pronos
   cancel-in-progress: false
 
 jobs:
+  # Étape 1 : calculer les pronos et préparer le site
   update:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -56,7 +55,14 @@ jobs:
       - uses: actions/upload-pages-artifact@v4
         with:
           path: _site
+
+  # Étape 2 : publier le site sur GitHub Pages
+  deploy:
+    needs: update
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
       - id: deploy
         uses: actions/deploy-pages@v4
-        with:
-          timeout: 600000
