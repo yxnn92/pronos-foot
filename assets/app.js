@@ -1,4 +1,4 @@
-// Pronos Foot : affichage + direct. Les données de /data sont recalculées par GitHub ;
+// Layan Pronos : affichage + direct. Les données de /data sont recalculées par GitHub ;
 // les scores en direct et les compos sont lus directement chez ESPN depuis le téléphone.
 const $ = (s, el = document) => el.querySelector(s);
 const view = $('#view');

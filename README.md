@@ -1,4 +1,4 @@
-# Pronos Foot
+# Layan Pronos
 
 Site perso de pronostics football. Il se met à jour **tout seul sur GitHub**, sans IA et sans clé API.
 

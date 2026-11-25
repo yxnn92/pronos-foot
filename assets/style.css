@@ -390,3 +390,6 @@ input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border-radius: 
 .warn-note { color: var(--lose); font-weight: 600; margin-top: 0; }
 .impact-box { margin-top: 12px; padding: 12px; border-radius: 12px; background: color-mix(in srgb, var(--lose) 8%, var(--surface-2)); border: 1px solid color-mix(in srgb, var(--lose) 25%, var(--line)); }
 .impact { padding: 6px 0; }
+
+/* Logo Layan Pronos */
+.mark-logo { width: 42px; height: 42px; border-radius: 11px; display: block; box-shadow: 0 6px 18px -6px rgba(52, 211, 153, .55); }

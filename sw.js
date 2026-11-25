@@ -1,6 +1,6 @@
 // Permet d'installer le site comme une appli et de l'ouvrir même sans réseau (dernières données vues).
-const CACHE = 'pronos-v7';
-const SHELL = ['./', 'index.html', 'assets/style.css', 'assets/app.js', 'assets/icon.svg', 'manifest.webmanifest'];
+const CACHE = 'pronos-v8';
+const SHELL = ['./', 'index.html', 'assets/style.css', 'assets/app.js', 'assets/logo-192.png', 'manifest.webmanifest'];
 
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener('activate', (e) => {
