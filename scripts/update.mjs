@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DISPLAY, RATING_ONLY, STANDINGS, DAYS_AHEAD, DAYS_BACK } from './config.mjs';
 import { buildRatings, predict, buildPicks, grade } from './model.mjs';
+import { extractStats, STAT_SLUGS } from './collect.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = path.join(ROOT, 'data');
@@ -271,7 +272,9 @@ function absenceImpact(teamId, leaders, lineup, absents, teamStats) {
     }
   }
   lost = Math.min(lost, 0.6);
-  return { f: r3(1 - 0.5 * lost), who };
+  // Backtest sur ~5 000 cas (25/11/2026) : aucun effet mesurable des buteurs absents sur les buts marqués
+  // (rotations, remplaçants). On n'ajuste donc plus le prono : f = 1. On garde la liste pour l'affichage.
+  return { f: 1, who, lost: r3(lost) };
 }
 
 const de = (n) => (/^[aeiouyhéèâî]/i.test(n) ? `d'${n}` : `de ${n}`);
@@ -448,9 +451,19 @@ async function main() {
   const byId = new Map(all.map((e) => [e.id, e]));
   const results = [...byId.values()].filter((e) => e.completed && e.hs != null && e.as != null);
   log('matchs joués utilisés pour le modèle :', results.length);
+  // Tirs cadrés des matchs joués (Top 5 + coupes d'Europe) : on complète le cache avec les nouveaux matchs.
+  const statsFile = path.join(CACHE, 'matchstats.json');
+  const mstats = await readJSON(statsFile, {});
+  const newStats = results.filter((e) => STAT_SLUGS.includes(e.slug) && !mstats[e.id]);
+  await pool(newStats, 4, async (e) => {
+    const s = await getJSON(`${SITE}/${e.slug}/summary?event=${e.id}`);
+    if (s) mstats[e.id] = { slug: e.slug, date: e.date, ...extractStats(s, e) };
+  });
+  if (newStats.length) await writeJSON(statsFile, mstats);
+  log('stats de tirs :', Object.keys(mstats).length, 'matchs (', newStats.length, 'nouveaux )');
   const ratings = buildRatings(
-    results.map((e) => ({ date: e.date, slug: e.slug, h: e.h.id, a: e.a.id, hs: e.hs, as: e.as, neutral: e.neutral, nat: e.nat })),
-    nationElo,
+    results.map((e) => ({ id: e.id, date: e.date, slug: e.slug, h: e.h.id, a: e.a.id, hs: e.hs, as: e.as, neutral: e.neutral, nat: e.nat })),
+    nationElo, mstats,
   );
 
   // Stats par équipe dans chaque compétition (saison en cours)

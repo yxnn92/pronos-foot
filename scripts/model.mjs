@@ -60,7 +60,41 @@ function overProb(m, line) {
 export const expScore = (dr) => 1 / (1 + Math.pow(10, -dr / 400));
 
 // ---------- Notes Elo des clubs, calculées sur tous les matchs joués ----------
-export function buildRatings(results, nationElo) {
+// ---------- Dixon-Coles : forces d'attaque / de défense pondérées dans le temps ----------
+// « Buts » = moitié vrais buts, moitié tirs cadrés × 0,32 (réglé par backtest sur ~2 900 matchs).
+export function fitDC(results, stats, cutoff, { xi = 0.005, k = 3, alpha = 0.5 } = {}) {
+  const D = 864e5, att = new Map(), def = new Map(); let home = 1.25;
+  const data = [];
+  for (const r of results) {
+    if (r.nat) continue;
+    const t = Date.parse(r.date); if (t >= cutoff || cutoff - t > 400 * D) continue;
+    let gh = r.hs, ga = r.as; const st = stats?.[r.id];
+    if (st?.sot?.[0] != null && st?.sot?.[1] != null) { gh = alpha * r.hs + (1 - alpha) * st.sot[0] * 0.32; ga = alpha * r.as + (1 - alpha) * st.sot[1] * 0.32; }
+    data.push({ h: r.h, a: r.a, gh, ga, w: Math.exp(-xi * (cutoff - t) / D), n: r.neutral });
+    for (const x of [r.h, r.a]) if (!att.has(x)) { att.set(x, 1); def.set(x, 1); }
+  }
+  if (!data.length) return null;
+  const mu = data.reduce((s, x) => s + x.w * (x.gh + x.ga), 0) / data.reduce((s, x) => s + 2 * x.w, 0);
+  for (let it = 0; it < 12; it++) {
+    const nA = new Map(), dA = new Map(), nD = new Map(), dD = new Map(); let hn = 0, hd = 0;
+    const add = (m, key, v) => m.set(key, (m.get(key) || 0) + v);
+    for (const x of data) {
+      const hf = x.n ? 1 : home;
+      add(nA, x.h, x.w * x.gh); add(dA, x.h, x.w * mu * hf * def.get(x.a));
+      add(nA, x.a, x.w * x.ga); add(dA, x.a, x.w * mu * def.get(x.h));
+      add(nD, x.a, x.w * x.gh); add(dD, x.a, x.w * mu * hf * att.get(x.h));
+      add(nD, x.h, x.w * x.ga); add(dD, x.h, x.w * mu * att.get(x.a));
+      if (!x.n) { hn += x.w * x.gh; hd += x.w * mu * att.get(x.h) * def.get(x.a); }
+    }
+    for (const t of att.keys()) { att.set(t, ((nA.get(t) || 0) + k) / ((dA.get(t) || 0) + k)); def.set(t, ((nD.get(t) || 0) + k) / ((dD.get(t) || 0) + k)); }
+    const ma = [...att.values()].reduce((x, y) => x + y, 0) / att.size, md = [...def.values()].reduce((x, y) => x + y, 0) / def.size;
+    for (const t of att.keys()) { att.set(t, att.get(t) / ma); def.set(t, def.get(t) / md); }
+    home = hd ? hn / hd : home;
+  }
+  return { att, def, home, mu };
+}
+
+export function buildRatings(results, nationElo, stats = {}) {
   const elo = new Map();
   const form = new Map(); // attaque/défense pondérées (récent = plus important)
   const sorted = [...results].sort((a, b) => a.date.localeCompare(b.date));
@@ -88,18 +122,22 @@ export function buildRatings(results, nationElo) {
     elo.set(r.a, elo.get(r.a) - delta);
   }
   for (const r of sorted) {
-    for (const [t, gf, ga] of [[r.h, r.hs, r.as], [r.a, r.as, r.hs]]) {
+    // Quand les tirs cadrés sont connus : 30 % vrais buts + 70 % tirs cadrés × 0,32 (plus stable que les buts seuls).
+    const st = stats[r.id], hasSot = st?.sot?.[0] != null && st?.sot?.[1] != null;
+    const g = (i, real) => (hasSot ? 0.3 * real + 0.7 * st.sot[i] * 0.32 : real);
+    for (const [t, gf, ga] of [[r.h, g(0, r.hs), g(1, r.as)], [r.a, g(1, r.as), g(0, r.hs)]]) {
       const f = form.get(t) || { gf: 0, ga: 0, n: 0 };
       const decay = 0.98; // demi-vie d'environ 35 matchs (réglé par backtest : meilleur que 10)
       f.gf = f.gf * decay + gf; f.ga = f.ga * decay + ga; f.n = f.n * decay + 1;
       form.set(t, f);
     }
   }
+  const dc = fitDC(sorted, stats, Date.now());
   const get = (id, nat, name) => {
     if (nat) return nationElo(name) ?? 1500;
     return elo.get(id) ?? START_DEFAULT;
   };
-  return { elo, form, get };
+  return { elo, form, get, dc };
 }
 
 function attDef(form, id) {
@@ -130,6 +168,13 @@ export function predict({ hId, aId, hName, aName, nat, neutral, ratings, market,
   total = Math.min(4.2, Math.max(1.7, total));
 
   let sModel = solveSupremacy(total, weModel);
+  // Écart de niveau : 60 % Elo + 40 % Dixon-Coles avec tirs (meilleur réglage du backtest : 53,5 % de bons 1N2)
+  const dc = ratings.dc;
+  if (!nat && dc?.att.has(hId) && dc?.att.has(aId)) {
+    const hf = neutral ? 1 : dc.home;
+    const dlh = dc.mu * hf * dc.att.get(hId) * dc.def.get(aId), dla = dc.mu * dc.att.get(aId) * dc.def.get(hId);
+    sModel = 0.6 * sModel + 0.4 * Math.max(-total + 0.2, Math.min(total - 0.2, dlh - dla));
+  }
   // Absences (blessés, suspendus, compo) : on baisse les buts attendus de l'équipe privée de ses buteurs/passeurs.
   // Appliqué au modèle seulement : les cotes du marché tiennent déjà compte des absences connues.
   const fh = absAdj?.h ?? 1, fa = absAdj?.a ?? 1;

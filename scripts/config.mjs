@@ -49,7 +49,7 @@ export const HOME_ADV = 50;      // avantage du terrain, en points Elo (clubs), 
 export const HOME_ADV_NAT = 90;  // sélections, quand le match n'est pas sur terrain neutre
 export const K_CLUB = 20;
 export const K_EURO = 1.5;       // les matchs de coupe d'Europe comptent plus : ils comparent les championnats
-export const MODEL_WEIGHT = 0.45; // part du modèle face aux cotes du marché (0,45 = 45 % modèle, 55 % marché)
+export const MODEL_WEIGHT = 0.1;  // part du modèle face aux cotes (backtest : les cotes Bet365 seules sont les plus précises, le modèle sert surtout sans cotes)
 export const VALUE_EDGE = 0.05;  // value bet si probabilité × cote ≥ 1,05
 export const MAX_GAP = 0.15;     // pas de value si le modèle et le marché diffèrent de plus de 15 points
 export const DAYS_AHEAD = 7;

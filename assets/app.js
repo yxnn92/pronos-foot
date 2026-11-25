@@ -240,7 +240,7 @@ function renderMatchs() {
     ${state.q ? `<p class="note">Résultats pour « ${esc(state.q)} » sur les ${days.length} jours affichés.</p>` : ''}
     ${list.length ? groupByComp(list).map(([slug, ms]) => compHead(slug, ms.length) + `<div class="mlist">${ms.map(matchCard).join('')}</div>`).join('') : '<div class="card empty">Aucun match pour ce choix.</div>'}
     ${!state.q && dayCombos.length ? `<h2>🎯 Combinés suggérés</h2><div class="grid2">${dayCombos.map(comboHtml).join('')}</div><p class="note">Cotes ≈ : estimées à partir des cotes 1N2.</p>` : ''}
-    ${!state.q && sup.length ? `<h2>💥 Surprises possibles</h2><p class="note">Outsiders à qui notre modèle donne nettement plus de chances que les bookmakers.</p><div class="grid2">${sup.map(surpriseHtml).join('')}</div>` : ''}
+    ${!state.q && sup.length ? `<h2>💥 Surprises possibles</h2><p class="note">Outsiders à qui notre modèle donne nettement plus de chances que les bookmakers. Attention : sur les saisons passées, les bookmakers avaient le plus souvent raison. C'est une piste, pas un conseil.</p><div class="grid2">${sup.map(surpriseHtml).join('')}</div>` : ''}
   `;
   view.querySelectorAll('[data-day]').forEach((b) => b.onclick = () => { state.day = b.dataset.day; state.q = ''; render(); });
   const dBar = view.querySelector('.days'), dAct = view.querySelector('.day.active');
