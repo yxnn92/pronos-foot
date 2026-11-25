@@ -387,3 +387,4 @@ input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border-radius: 
 .abs-row { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .abs-row:last-child { border-bottom: 0; }
 .abs-row .tag { min-width: 78px; justify-content: center; text-transform: capitalize; }
+.warn-note { color: var(--lose); font-weight: 600; margin-top: 0; }

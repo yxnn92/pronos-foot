@@ -267,9 +267,9 @@ const PLAYER_TYPES = {
 };
 const estOdds = (p) => r2(Math.max(1.02, 0.91 / p)); // cote estimée au taux de retour français (≈ 91 %) quand le bookmaker ne la donne pas
 // Tous les paris qu'on peut mettre dans un combiné pour un match.
-function legFor(m, type, key) {
+function legFor(m, type, key, allowAbsent = false) {
   const p = m.pred, x = m.odds.x12, names = { h: m.h.short, a: m.a.short };
-  let prob, o = null, est = false, label;
+  let prob, o = null, est = false, label, status = null, absInfo = null;
   if (type === '1N2') {
     prob = p.p[key]; o = x?.[{ h: 0, d: 1, a: 2 }[key]] ?? null;
     label = key === 'd' ? 'Match nul' : `Victoire ${names[key]}`;
@@ -286,13 +286,14 @@ function legFor(m, type, key) {
   } else if (PLAYER_TYPES[type]) {
     // Paris joueurs : buteur (cote Bet365 quand elle existe), passeur, décisif (but ou passe)
     const pl = [...m.players.h, ...m.players.a].find((x) => x.id === key);
-    if (!pl || pl.status === 'absent') return null;
+    if (!pl || (pl.status === 'absent' && !allowAbsent)) return null;
     prob = pl[PLAYER_TYPES[type].field]; label = `${pl.name} ${PLAYER_TYPES[type].label}`;
     if (type === 'Scorer' && pl.o) o = pl.o;
+    status = pl.status; absInfo = pl.absInfo;
   }
   if (prob == null) return null;
-  if (!o) { o = estOdds(prob); est = true; }
-  return { id: `${m.id}|${type}|${key}`, mid: m.id, type, key, label, p: r2(prob * 100) / 100, odds: o, est, match: `${m.h.short} - ${m.a.short}`, date: m.date, slug: m.slug };
+  if (!o) { o = estOdds(Math.max(prob, 0.01)); est = true; }
+  return { id: `${m.id}|${type}|${key}`, mid: m.id, type, key, label, p: r2(prob * 100) / 100, odds: o, est, match: `${m.h.short} - ${m.a.short}`, date: m.date, slug: m.slug, status, absInfo };
 }
 function playerLegs(m) {
   const out = [];
@@ -308,7 +309,17 @@ function allLegs(m, withPlayers = false) {
   const legs = out.filter((l) => l && l.p >= 0.15 && l.p <= 0.97 && l.odds >= 1.05);
   return withPlayers ? legs.concat(playerLegs(m)) : legs;
 }
-const legById = (id) => { const [mid, type, key] = id.split('|'); const m = M.matches.find((x) => x.id === mid); return m ? legFor(m, type, key) : null; };
+const legById = (id, allowAbsent = false) => { const [mid, type, key] = id.split('|'); const m = M.matches.find((x) => x.id === mid); return m ? legFor(m, type, key, allowAbsent) : null; };
+// Alerte sur un pari de Mon combiné quand la compo ou les blessures changent la donne
+function legWarn(l) {
+  if (l.gone) return '<span class="tag lose">⚠️ Match plus disponible</span>';
+  if (!PLAYER_TYPES[l.type]) return '';
+  if (l.status === 'absent') return `<span class="tag lose" title="${esc(l.absInfo || '')}">⚠️ ${l.absInfo ? esc(l.absInfo.split(' · ')[0]) : 'Absent de la compo'}</span>`;
+  if (l.status === 'remplaçant') return '<span class="tag big">⚠️ Remplaçant</span>';
+  if (l.status === 'incertain') return `<span class="tag big" title="${esc(l.absInfo || '')}">⚠️ Incertain</span>`;
+  if (l.status === 'titulaire') return '<span class="tag win">✓ Titulaire</span>';
+  return '';
+}
 
 // ---------- Générateur : la meilleure combinaison pour une cote visée ----------
 // On cherche n paris (matchs différents) dont la cote totale est proche de la cible,
@@ -358,7 +369,7 @@ function updateMyCount() { const c = $('#myCount'); if (c) { c.hidden = !my.leng
 function addLeg(id, silent) {
   if (my.find((l) => l.id === id)) { if (!silent) toast('Déjà dans ton combiné'); return; }
   const l = legById(id); if (!l) return;
-  my.push({ id, odds: l.odds, est: l.est });
+  my.push({ id, odds: l.odds, est: l.est, label: l.label, match: l.match, date: l.date, mid: l.mid, type: l.type });
   saveMy(); if (!silent) toast(`Ajouté : ${l.label}`);
 }
 function toast(msg) {
@@ -391,6 +402,7 @@ function genCard(c, title, sub, id) {
   </div>`;
 }
 function renderCombis() {
+  refreshSoonLineups();
   const ldcPool = poolFor('ldc', 7), euroPool = poolFor('euro', 7), lgPool = poolFor('leagues', 7);
   const cupPool = ldcPool.length >= 2 ? ldcPool : euroPool, cupName = ldcPool.length >= 2 ? 'Ligue des champions' : "Coupes d'Europe";
   const wp = cState.players;
@@ -404,7 +416,9 @@ function renderCombis() {
   if (!gen && cState.seen.size) { cState.seen = new Set(); gen = generate(pool, cState.n, cState.target, cState.seed, null, wp); }
   cState.last = gen;
   const scopes = [['all', 'Tout'], ['ldc', 'LDC'], ['euro', "Coupes d'Europe"], ['leagues', 'Championnats'], ...LEAGUES.map((s) => [s, comp(s).name])];
-  const myLegs = my.map((x) => ({ ...legById(x.id), ...x })).filter((l) => l.mid);
+  // On garde tous les paris, même devenus impossibles (joueur absent…), pour pouvoir prévenir.
+  const myLegs = my.map((x) => { const l = legById(x.id, true); return l ? { ...l, odds: x.odds, est: x.est } : { ...x, label: x.label || 'Pari', match: x.match || '', date: x.date || new Date().toISOString(), p: 0, gone: true }; });
+  const warnings = myLegs.filter((l) => l.gone || l.status === 'absent' || l.status === 'remplaçant' || l.status === 'incertain').length;
   const myOdds = myLegs.reduce((t, l) => t * (Number(l.odds) || 1), 1), myP = myLegs.reduce((t, l) => t * (l.p || 0), 1);
   const sameMatch = new Set(myLegs.map((l) => l.mid)).size < myLegs.length;
   const legVerdict = (l) => { const m = M.matches.find((x) => x.id === l.mid); if (!m || m.hs == null || m.state === 'pre') return '';
@@ -435,7 +449,7 @@ function renderCombis() {
 
     <h2>📝 Mon combiné ${myLegs.length ? `<span class="tag">${myLegs.length} pari${myLegs.length > 1 ? 's' : ''}</span>` : ''}</h2>
     <div class="card pad">
-      ${myLegs.length ? `<div class="combo-legs" style="margin-top:0">${myLegs.map((l) => legRow(l, `<div class="my-ctl">${legVerdict(l)}<input class="odd-in" type="number" step="0.01" min="1.01" inputmode="decimal" value="${r2(l.odds)}" data-odds="${esc(l.id)}" title="Mets ici ta cote Betclic si tu veux"><button class="x" data-del="${esc(l.id)}" aria-label="Retirer">✕</button></div>`)).join('')}</div>
+      ${myLegs.length ? `<div class="combo-legs" style="margin-top:0">${warnings ? `<p class="note warn-note">⚠️ ${warnings} pari${warnings > 1 ? 's' : ''} à vérifier : compo, blessure ou match indisponible. Retire-le${warnings > 1 ? 's' : ''} ou remplace-le${warnings > 1 ? 's' : ''}.</p>` : ''}${myLegs.map((l) => legRow(l, `<div class="my-ctl">${legWarn(l)}${legVerdict(l)}<input class="odd-in" type="number" step="0.01" min="1.01" inputmode="decimal" value="${r2(l.odds)}" data-odds="${esc(l.id)}" title="Mets ici ta cote Betclic si tu veux"><button class="x" data-del="${esc(l.id)}" aria-label="Retirer">✕</button></div>`)).join('')}</div>
         ${sameMatch ? '<p class="note">⚠️ Plusieurs paris sur le même match : les bookmakers les refusent souvent dans un combiné.</p>' : ''}
         <div class="my-sum">
           <div><div class="small muted">Cote totale</div><div class="combo-total">${odd(myOdds)}</div></div>
@@ -661,9 +675,10 @@ function ficheStats(m) {
 }
 
 // Compos : lues en direct chez ESPN si elles ne sont pas encore dans les données du site.
-async function maybeFetchLineup(m) {
-  if (m.lineup.h || m._lineupTried || Date.parse(m.date) - Date.now() > 100 * 60e3) return;
-  m._lineupTried = true;
+async function maybeFetchLineup(m, noRedraw) {
+  if (m.lineup.h || m._lineupTried || Date.parse(m.date) - Date.now() > 100 * 60e3) return false;
+  // nouvel essai possible 10 min plus tard si la compo n'était pas encore sortie
+  m._lineupTried = true; setTimeout(() => { if (!m.lineup.h) m._lineupTried = false; }, 10 * 60e3);
   try {
     const s = await fetch(`${ESPN}/${m.slug}/summary?event=${m.id}`).then((r) => r.json());
     for (const r of s.rosters || []) {
@@ -675,10 +690,25 @@ async function maybeFetchLineup(m) {
         subs: r.roster.filter((p) => !p.starter).map((p) => ({ id: p.athlete?.id, name: p.athlete?.displayName })),
       };
       const xi = m.lineup[side].xi.map((p) => p.id), subs = m.lineup[side].subs.map((p) => p.id);
-      for (const p of m.players[side]) p.status = xi.includes(p.id) ? 'titulaire' : subs.includes(p.id) ? 'remplaçant' : 'absent';
+      for (const p of m.players[side]) {
+        const before = p.status;
+        p.status = xi.includes(p.id) ? 'titulaire' : subs.includes(p.id) ? 'remplaçant' : 'absent';
+        // même règle que le serveur : remplaçant ≈ 30 % du temps de jeu, absent = 0
+        const f = p.status === 'remplaçant' ? 0.3 : p.status === 'absent' ? 0 : 1;
+        if (before !== p.status && f < 1) for (const k of ['pg', 'pa', 'pd']) p[k] = Math.round((1 - Math.pow(1 - p[k], f)) * 1000) / 1000;
+        if (p.status === 'absent' && !p.absInfo) p.absInfo = 'absent de la feuille de match';
+      }
     }
   } catch (e) { /* pas de réseau : on garde le message */ }
-  if (modalId === m.id && modalDraw) modalDraw();
+  if (!noRedraw && modalId === m.id && modalDraw) modalDraw();
+  return !!m.lineup.h;
+}
+// Onglet Combinés : va chercher les compos des matchs qui commencent bientôt, puis recalcule.
+async function refreshSoonLineups() {
+  const soon = M.matches.filter((m) => isPre(m) && !m.lineup.h && !m._lineupTried && Date.parse(m.date) - Date.now() < 100 * 60e3);
+  if (!soon.length) return;
+  const got = await Promise.all(soon.map((m) => maybeFetchLineup(m, true)));
+  if (got.some(Boolean) && state.tab === 'combis') { resetGen(); render(); toast('Compos mises à jour'); }
 }
 function ficheCompos(m) {
   const side = (t, l) => l ? `<div class="card pad section"><div class="row-between"><b style="display:flex;gap:8px;align-items:center">${img(t.logo, 'logo', 'width:22px;height:22px')}${esc(t.short)}</b><span class="tag">${esc(l.formation)}</span></div>
