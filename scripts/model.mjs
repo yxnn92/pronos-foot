@@ -90,7 +90,7 @@ export function buildRatings(results, nationElo) {
   for (const r of sorted) {
     for (const [t, gf, ga] of [[r.h, r.hs, r.as], [r.a, r.as, r.hs]]) {
       const f = form.get(t) || { gf: 0, ga: 0, n: 0 };
-      const decay = 0.93; // demi-vie d'environ 10 matchs
+      const decay = 0.98; // demi-vie d'environ 35 matchs (réglé par backtest : meilleur que 10)
       f.gf = f.gf * decay + gf; f.ga = f.ga * decay + ga; f.n = f.n * decay + 1;
       form.set(t, f);
     }
@@ -106,7 +106,7 @@ function attDef(form, id) {
   const f = form.get(id);
   const base = 1.35;
   if (!f || f.n < 0.5) return { a: 1, d: 1 };
-  const shrink = f.n / (f.n + 6);
+  const shrink = f.n / (f.n + 30); // lissage fort : les écarts de buts entre équipes sont en partie dus au hasard
   return {
     a: 1 + shrink * (f.gf / f.n / base - 1),
     d: 1 + shrink * (f.ga / f.n / base - 1),
