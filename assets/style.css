@@ -475,3 +475,18 @@ input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border-radius: 
 .slide-l { animation: slideL .22s ease-out; } .slide-r { animation: slideR .22s ease-out; }
 @keyframes slideL { from { transform: translateX(30px); opacity: .4; } } @keyframes slideR { from { transform: translateX(-30px); opacity: .4; } }
 button:active { transform: scale(.97); }
+
+/* Fiche : ouverture douce et poignée qui réagit quand on tire assez loin */
+.sheet { animation: sheetIn .46s cubic-bezier(.32,.72,0,1); will-change: transform; }
+@keyframes sheetIn { from { transform: translateY(70%); } }
+.modal { animation: fade .3s ease; }
+.sheet-grip { width: 44px; height: 5px; transition: width .2s, background-color .2s; }
+.sheet.drag-ready .sheet-grip { width: 64px; background: #fff; }
+.sheet.drag-ready .fiche-head { filter: brightness(1.08); }
+
+/* Paris à cote 1,20 – 1,80 */
+.mini.solid { grid-template-columns: 52px 1fr auto; align-items: start; }
+.solid-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; margin-top: 4px; font-size: 12px; color: var(--text-2); }
+.solid-odd { display: inline-block; margin-top: 4px; padding: 3px 9px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-weight: 800; font-size: 14px; }
+.band-seg { margin: 0 0 10px; display: flex; width: 100%; }
+.band-seg button { flex: 1; padding: 7px 4px; font-size: 12px; }

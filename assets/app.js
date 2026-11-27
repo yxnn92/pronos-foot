@@ -2,6 +2,35 @@
 // les scores en direct et les compos sont lus directement chez ESPN depuis le téléphone.
 const $ = (s, el = document) => el.querySelector(s);
 const view = $('#view');
+
+// =================== Retours haptiques ===================
+// Android : vibreur du téléphone. iPhone : Safari interdit le vibreur aux sites, mais depuis iOS 18
+// le petit interrupteur système (<input type="checkbox" switch>) déclenche un vrai retour haptique quand on le touche.
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const HAPTIC = { tick: 4, light: 9, medium: 16, heavy: 28, success: [10, 50, 14], warning: [18, 70, 18], error: [30, 60, 30, 60, 30] };
+let iosSwitch = null, lastHaptic = 0;
+function haptic(kind = 'light') {
+  lastHaptic = Date.now();
+  try {
+    if (!IS_IOS && navigator.vibrate) { navigator.vibrate(HAPTIC[kind] ?? HAPTIC.light); return; }
+    if (IS_IOS) {
+      if (!iosSwitch) {
+        iosSwitch = document.createElement('label');
+        iosSwitch.setAttribute('aria-hidden', 'true');
+        iosSwitch.style.cssText = 'position:fixed;left:-200px;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+        const i = document.createElement('input'); i.type = 'checkbox'; i.setAttribute('switch', ''); i.tabIndex = -1;
+        iosSwitch.appendChild(i); document.body.appendChild(iosSwitch);
+      }
+      iosSwitch.click();
+      if (kind === 'success' || kind === 'warning' || kind === 'error') setTimeout(() => iosSwitch.click(), 90);
+    }
+  } catch (e) { /* pas de retour haptique sur cet appareil */ }
+}
+// Petit retour sur tous les boutons, cases et cartes (sauf si une action vient déjà d'en donner un plus fort)
+document.addEventListener('click', (e) => {
+  if (Date.now() - lastHaptic < 60) return;
+  if (e.target.closest('button, .mc, .mini, .leg, label.switch, label.toggle, select, .day, .chip')) haptic('light');
+}, true);
 const TZ = 'Europe/Paris';
 const ESPN = 'https://site.api.espn.com/apis/site/v2/sports/soccer';
 const state = { tab: 'matchs', day: null, comp: 'all', valueOnly: false, q: '', standing: null, stView: 'table', pSort: 'pd', pComp: 'all', pValue: false };
@@ -117,7 +146,7 @@ let favs = new Set();
 try { favs = new Set(JSON.parse(localStorage.getItem('favoris') || '[]')); } catch (e) {}
 const isFav = (id) => favs.has(id);
 function toggleFav(id) {
-  buzz(15);
+  haptic(favs.has(id) ? 'light' : 'success');
   if (favs.has(id)) { favs.delete(id); toast('Retiré des favoris'); } else { favs.add(id); toast('⭐ Ajouté aux favoris'); }
   // on oublie les favoris des matchs qui ne sont plus affichés
   const ids = new Set(M.matches.map((m) => m.id)); favs = new Set([...favs].filter((x) => ids.has(x)));
@@ -243,6 +272,40 @@ function surePicksHtml(max = 8, days = 2) {
   return html + '</div>';
 }
 
+// ---------- Paris à cote 1,20 – 1,80 : le meilleur compromis chances / gain ----------
+const SOLID_MIN = 1.2, SOLID_MAX = 1.8;
+const BANDS = [['all', 'Toutes', 1.2, 1.8], ['b1', '1,20 – 1,40', 1.2, 1.4], ['b2', '1,40 – 1,60', 1.4, 1.6], ['b3', '1,60 – 1,80', 1.6, 1.8]];
+let solidBand = 'all';
+function solidPicks(m, band = 'all') {
+  const [, , lo, hi] = BANDS.find((b) => b[0] === band) || BANDS[0];
+  return allLegs(m).filter((l) => SURE_TYPES[l.type] && l.odds >= lo && l.odds <= hi && l.p >= 0.5)
+    .sort((a, b) => b.p - a.p).slice(0, 1); // le plus probable du match
+}
+// Réussite passée pour ce niveau de chances (mesurée sur les saisons précédentes)
+function pastRate(type, p) {
+  const bin = p >= 0.8 ? '80' : p >= 0.7 ? '70' : null;
+  const b = bin && CAL?.bins?.[type]?.[bin];
+  return b ? Math.round(b.real * 100) : null;
+}
+const starsOf = (p) => (p >= 0.8 ? 5 : p >= 0.72 ? 4 : p >= 0.64 ? 3 : p >= 0.58 ? 2 : 1);
+function solidPicksHtml(max = 10, days = 2) {
+  const lim = Date.now() + days * 864e5;
+  const list = M.matches.filter((m) => isPre(m) && Date.parse(m.date) < lim).flatMap((m) => solidPicks(m, solidBand).map((l) => ({ ...l, m })))
+    .sort((a, b) => b.p - a.p).slice(0, max);
+  let html = '<h2>🎯 Paris à cote 1,20 – 1,80 ' + info('solides') + '</h2><p class="note">Les paris les plus probables des 48 prochaines heures, un par match. Choisis ta fourchette de cote :</p>'
+    + '<div class="segmented band-seg">' + BANDS.map((b) => '<button class="' + (b[0] === solidBand ? 'active' : '') + '" data-band="' + b[0] + '">' + b[1] + '</button>').join('') + '</div>';
+  if (!list.length) return html + '<div class="card empty">Aucun pari dans cette fourchette pour le moment.</div>';
+  html += '<div class="card sure-list">';
+  for (const l of list) {
+    const past = pastRate(l.type, l.p);
+    html += '<div class="mini solid" data-id="' + l.m.id + '"><div class="t">' + fTime.format(new Date(l.m.date)) + '<br><span class="small muted">' + fWd.format(new Date(l.m.date)).replace('.', '') + '</span></div>'
+      + '<div style="min-width:0"><div class="small muted" style="display:flex;gap:6px;align-items:center">' + img(l.m.h.logo, 'logo', 'width:14px;height:14px') + esc(l.match) + ' · ' + esc(comp(l.m.slug).short) + '</div>'
+      + '<b>' + esc(l.label) + '</b><div class="solid-meta">' + conf(starsOf(l.p)) + '<span>10 € → <b>' + (10 * l.odds).toFixed(2).replace('.', ',') + ' €</b></span>' + (past ? '<span class="muted">passé : ' + past + ' %</span>' : '') + '</div></div>'
+      + '<div style="text-align:right"><b class="sure-p">' + pctN(l.p) + ' %</b><div class="solid-odd">' + odd(l.odds) + (l.est ? '≈' : '') + '</div></div></div>';
+  }
+  return html + '</div>';
+}
+
 // ---------- Combiné du jour (choisi et suivi par le serveur) ----------
 function currentCombo() {
   const days = Object.keys(COMBOS).sort(), t = todayKey();
@@ -296,7 +359,7 @@ function renderMatchs() {
   let list = M.matches.filter((m) => dayKey(m.date) === state.day);
   if (state.q) list = M.matches.filter((m) => matchText(m).includes(state.q.toLowerCase()));
   if (state.comp !== 'all') list = list.filter((m) => m.slug === state.comp);
-  if (state.valueOnly) list = list.filter((m) => isPre(m) && surePicks(m).length);
+  if (state.valueOnly) list = list.filter((m) => isPre(m) && solidPicks(m).length);
   const live = M.matches.filter((m) => m.state === 'in');
   const motd = matchOfDay();
   const dayCombos = combos(M.matches.filter((m) => dayKey(m.date) === state.day));
@@ -314,13 +377,13 @@ function renderMatchs() {
       </div>
       <div class="hero-foot"><span class="pick">${esc(mp.label)}${mp.odds ? ' · ' + odd(mp.odds) : ''}</span>${conf(mp.stars)}<div class="ring" style="--p:${pctN(mp.p)}"><span>${pctN(mp.p)}%</span></div></div>
     </div>` : ''}
-    ${!state.q ? favsHtml() + dailyComboHtml() + surePicksHtml(8) : ''}
+    ${!state.q ? favsHtml() + dailyComboHtml() + solidPicksHtml(10) : ''}
     ${live.length && !state.q ? `<h2><i class="dot-live"></i> En direct</h2><div class="mlist">${live.map(matchCard).join('')}</div>` : ''}
     <div class="filters">
       <div class="days">${days.map((d) => `<button class="day ${d === state.day && !state.q ? 'active' : ''}" data-day="${d}"><small>${wd(d)}</small><b>${noon(d).getUTCDate()}</b><span class="n">${count(d)} m.</span></button>`).join('')}</div>
       <div class="searchbox"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input type="search" id="q" placeholder="Rechercher une équipe" value="${esc(state.q)}"></div>
       <select id="comp"><option value="all">Toutes les compétitions</option>${comps.map((c) => `<option value="${c}" ${c === state.comp ? 'selected' : ''}>${esc(comp(c).name)}</option>`).join('')}</select>
-      <label class="toggle"><input type="checkbox" id="vOnly" ${state.valueOnly ? 'checked' : ''}> ✅ Quasi-sûrs</label>
+      <label class="toggle"><input type="checkbox" id="vOnly" ${state.valueOnly ? 'checked' : ''}> 🎯 Cote 1,20 – 1,80</label>
     </div>
     ${state.q ? `<p class="note">Résultats pour « ${esc(state.q)} » sur les ${days.length} jours affichés.</p>` : ''}
     ${list.length ? groupByComp(list).map(([slug, ms]) => compHead(slug, ms.length) + `<div class="mlist">${ms.map(matchCard).join('')}</div>`).join('') : '<div class="card empty">Aucun match pour ce choix.</div>'}
@@ -468,7 +531,7 @@ try { my = JSON.parse(localStorage.getItem(MY_KEY) || '[]'); } catch (e) { my = 
 const saveMy = () => { try { localStorage.setItem(MY_KEY, JSON.stringify(my)); } catch (e) {} updateMyCount(); };
 function updateMyCount() { const c = $('#myCount'); if (c) { c.hidden = !my.length; c.textContent = my.length; } updatePill(); }
 function addLeg(id, silent) {
-  buzz(10);
+  haptic('success');
   if (my.find((l) => l.id === id)) { if (!silent) toast('Déjà dans ton combiné'); return; }
   const l = legById(id); if (!l) return;
   my.push({ id, odds: l.odds, est: l.est, label: l.label, match: l.match, date: l.date, mid: l.mid, type: l.type });
@@ -570,18 +633,20 @@ function renderCombis() {
   `;
   view.querySelectorAll('[data-scope]').forEach((b) => b.onclick = () => { cState.scope = b.dataset.scope; resetGen(); render(); });
   view.querySelectorAll('[data-period]').forEach((b) => b.onclick = () => { cState.period = +b.dataset.period; resetGen(); render(); });
-  view.querySelectorAll('[data-step]').forEach((b) => b.onclick = () => { cState.n = Math.min(10, Math.max(2, cState.n + +b.dataset.step)); resetGen(); render(); });
+  view.querySelectorAll('[data-step]').forEach((b) => b.onclick = () => { haptic('medium'); cState.n = Math.min(10, Math.max(2, cState.n + +b.dataset.step)); resetGen(); render(); });
   const tr = $('#tRange');
-  tr.oninput = () => { $('#tVal').textContent = odd(sliderToOdds(+tr.value)); };
+  let lastNotch = Math.round(sliderToOdds(+tr.value) * 2);
+  // un « clic » à chaque palier de 0,5 de cote, comme une molette
+  tr.oninput = () => { const o = sliderToOdds(+tr.value); $('#tVal').textContent = odd(o); const n = Math.round(o * 2); if (n !== lastNotch) { lastNotch = n; haptic('tick'); } };
   tr.onchange = () => { cState.target = sliderToOdds(+tr.value); resetGen(); render(); };
   $('#withBoring').onchange = (e) => { allowBoring = e.target.checked; try { localStorage.setItem('parisClassiques', allowBoring ? '1' : '0'); } catch (x) {} resetGen(); render(); };
   $('#withPlayers').onchange = (e) => { cState.players = e.target.checked; try { localStorage.setItem('combiJoueurs', cState.players ? '1' : '0'); } catch (x) {} resetGen(); render(); };
-  $('#reroll')?.addEventListener('click', () => { for (const l of cState.last?.legs || []) cState.seen.add(l.id); cState.seed++; render(); });
+  $('#reroll')?.addEventListener('click', () => { haptic('medium'); for (const l of cState.last?.legs || []) cState.seen.add(l.id); cState.seed++; render(); });
   view.querySelectorAll('[data-addall]').forEach((b) => b.onclick = () => { const ids = b.dataset.addall.split(','); ids.forEach((id) => addLeg(id, true)); toast(`${ids.length} paris ajoutés à ton combiné`); render(); });
-  view.querySelectorAll('[data-del]').forEach((b) => b.onclick = () => { my = my.filter((l) => l.id !== b.dataset.del); saveMy(); render(); });
+  view.querySelectorAll('[data-del]').forEach((b) => b.onclick = () => { haptic('warning'); my = my.filter((l) => l.id !== b.dataset.del); saveMy(); render(); });
   view.querySelectorAll('[data-odds]').forEach((inp) => inp.onchange = () => { const l = my.find((x) => x.id === inp.dataset.odds); const v = parseFloat(String(inp.value).replace(',', '.')); if (l && v > 1) { l.odds = v; l.est = false; saveMy(); render(); } });
   $('#mise')?.addEventListener('change', (e) => { cState.mise = Math.max(0, parseFloat(e.target.value) || 0); render(); });
-  $('#clearMy')?.addEventListener('click', () => { my = []; saveMy(); render(); });
+  $('#clearMy')?.addEventListener('click', () => { haptic('warning'); my = []; saveMy(); render(); });
 }
 
 // ---------- onglet Joueurs ----------
@@ -731,34 +796,64 @@ function closeModal(fromHistory) {
 window.addEventListener('popstate', () => closeModal(true));
 
 // ---------- fermer la fiche en la glissant vers le bas (comme sur iPhone) ----------
+// La fiche suit le doigt avec un peu de résistance. Un « clic » se fait sentir quand on a tiré assez loin :
+// en lâchant, elle descend en douceur. Sinon, elle remonte avec un léger rebond.
+const EASE_OUT = 'cubic-bezier(.32,.72,0,1)';   // courbe des fiches iOS
+const SPRING = 'cubic-bezier(.34,1.45,.64,1)';   // petit rebond
+function animateClose() {
+  const sheet = $('.sheet'), modal = $('#modal');
+  if (modal.hidden) return;
+  haptic('light');
+  sheet.style.transition = 'transform .42s ' + EASE_OUT;
+  modal.style.transition = 'background-color .42s ' + EASE_OUT;
+  sheet.style.transform = 'translateY(' + (sheet.offsetHeight + 40) + 'px)';
+  modal.style.backgroundColor = 'rgba(2, 6, 23, 0)';
+  setTimeout(() => { sheet.style.transition = ''; modal.style.transition = ''; modal.style.backgroundColor = ''; closeModal(); }, 400);
+}
 (() => {
-  const sheet = $('.sheet'); let y0 = null, dy = 0, t0 = 0, dragging = false;
+  const sheet = $('.sheet'), modal = $('#modal'), grip = $('.sheet-grip');
+  let y0 = null, x0 = 0, dy = 0, dragging = false, ready = false, samples = [];
+  const threshold = () => Math.max(140, Math.min(260, sheet.offsetHeight * 0.26));
+  // résistance : la fiche suit le doigt à 85 %, puis plus lourdement après le palier
+  const follow = (d) => { const T = threshold(); return d <= T ? d * 0.85 : T * 0.85 + (d - T) * 0.5; };
   sheet.addEventListener('touchstart', (e) => {
-    // on ne commence à tirer que si la fiche est tout en haut (sinon c'est un défilement normal)
     if (sheet.scrollTop > 0 || e.touches.length > 1) { y0 = null; return; }
-    y0 = e.touches[0].clientY; dy = 0; t0 = Date.now(); dragging = false;
+    y0 = e.touches[0].clientY; x0 = e.touches[0].clientX; dy = 0; dragging = false; ready = false; samples = [{ y: y0, t: performance.now() }];
   }, { passive: true });
   sheet.addEventListener('touchmove', (e) => {
     if (y0 == null) return;
-    dy = e.touches[0].clientY - y0;
-    if (dy > 6 && sheet.scrollTop <= 0) {
+    const y = e.touches[0].clientY; dy = y - y0;
+    if (!dragging && Math.abs(e.touches[0].clientX - x0) > Math.abs(dy)) { y0 = null; return; } // geste horizontal : on laisse faire
+    if (dy > 8 && sheet.scrollTop <= 0) {
       dragging = true; e.preventDefault();
+      samples.push({ y, t: performance.now() }); if (samples.length > 6) samples.shift();
+      const off = follow(dy);
       sheet.style.transition = 'none';
-      sheet.style.transform = `translateY(${dy}px)`;
-      $('#modal').style.background = `rgba(2, 6, 23, ${Math.max(0, 0.55 - dy / 900)})`;
-    } else if (dy < 0) { y0 = null; }
+      sheet.style.transform = 'translateY(' + off + 'px)';
+      modal.style.transition = 'none';
+      modal.style.backgroundColor = 'rgba(2, 6, 23, ' + Math.max(0.08, 0.55 - off / 700).toFixed(3) + ')';
+      const isReady = dy > threshold();
+      if (isReady !== ready) { ready = isReady; haptic(ready ? 'medium' : 'tick'); sheet.classList.toggle('drag-ready', ready); }
+    } else if (dy < 0 && !dragging) { y0 = null; }
   }, { passive: false });
-  sheet.addEventListener('touchend', () => {
+  const end = () => {
     if (y0 == null || !dragging) { y0 = null; return; }
-    const fast = dy / Math.max(1, Date.now() - t0) > 0.6;
-    sheet.style.transition = 'transform .22s ease-out';
-    $('#modal').style.background = '';
-    if (dy > 120 || (fast && dy > 40)) {
-      sheet.style.transform = 'translateY(100%)';
-      setTimeout(() => { sheet.style.transition = ''; closeModal(); }, 200);
-    } else sheet.style.transform = '';
-    y0 = null; dragging = false;
-  });
+    const a = samples[0], b = samples[samples.length - 1];
+    const v = (b.y - a.y) / Math.max(1, b.t - a.t); // vitesse en px/ms
+    sheet.classList.remove('drag-ready');
+    if (ready || (v > 1.1 && dy > 90)) animateClose();
+    else {
+      haptic('tick');
+      sheet.style.transition = 'transform .5s ' + SPRING;
+      modal.style.transition = 'background-color .35s ease';
+      sheet.style.transform = '';
+      modal.style.backgroundColor = '';
+      setTimeout(() => { sheet.style.transition = ''; modal.style.transition = ''; }, 500);
+    }
+    y0 = null; dragging = false; ready = false;
+  };
+  sheet.addEventListener('touchend', end);
+  sheet.addEventListener('touchcancel', end);
 })();
 
 // ---------- fil du match (temps forts + stats), lu en direct chez ESPN ----------
@@ -997,17 +1092,19 @@ function render() {
 }
 $('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; state.tab = b.dataset.tab; render(); window.scrollTo({ top: 0 }); };
 view.addEventListener('click', (e) => {
+  const band = e.target.closest('[data-band]');
+  if (band) { solidBand = band.dataset.band; render(); return; }
   const fv = e.target.closest('[data-fav]');
   if (fv) { e.stopPropagation(); toggleFav(fv.dataset.fav); render(); return; }
   // bouton « + Mon combiné » du combiné du jour (onglet Matchs ; l'onglet Combinés gère le sien)
   const add = e.target.closest('[data-addall]');
   if (add && state.tab !== 'combis') { const ids = add.dataset.addall.split(','); ids.forEach((id) => addLeg(id, true)); toast(`${ids.length} paris ajoutés à ton combiné`); updateMyCount(); return; }
   const c = e.target.closest('[data-id]'); if (c && !e.target.closest('input,select,button,label')) openMatch(c.dataset.id); });
-$('#closeModal').onclick = () => closeModal();
+$('#closeModal').onclick = () => animateClose();
 $('#modalBody').addEventListener('click', (e) => {
   const fv = e.target.closest('[data-fav]');
   if (fv) { toggleFav(fv.dataset.fav); if (modalDraw) modalDraw(); render(); return; } const b = e.target.closest('[data-add]'); if (b) { addLeg(b.dataset.add); b.classList.add('added'); } });
-$('#modal').onclick = (e) => { if (e.target.id === 'modal') closeModal(); };
+$('#modal').onclick = (e) => { if (e.target.id === 'modal') animateClose(); };
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 $('#themeBtn').onclick = () => {
   const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
@@ -1018,7 +1115,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.ser
 
 
 // =================== Aide, explications, gestes ===================
-const buzz = (ms = 12) => { try { navigator.vibrate?.(ms); } catch (e) {} };
+const buzz = (ms = 12) => haptic(ms >= 15 ? 'medium' : ms <= 8 ? 'tick' : 'light');
 
 // Lexique : chaque terme a une explication courte (bouton « ? » et page Aide)
 const GLOSSARY = {
@@ -1030,6 +1127,7 @@ const GLOSSARY = {
   cotest: ['Cote ≈ (estimée)', "Quand le bookmaker ne donne pas la cote d'un pari, le site l'estime à partir de nos chances. Mets la vraie cote Betclic dans « Mon combiné » pour être exact."],
   confiance: ['Barres de confiance', "De 1 à 5 barres : notre niveau de confiance dans le prono. Vert vif = très sûr, vert clair = sûr, jaune = moyen, orange = risqué, rouge = très risqué."],
   combine: ['Combiné', "Plusieurs paris réunis : les cotes se multiplient, mais il faut que TOUS les paris passent. Le combiné du jour est le plus probable possible pour une cote d'environ 2."],
+  solides: ['Paris à cote 1,20 – 1,80', "Pour chaque match, le pari le plus probable dont la cote est entre 1,20 et 1,80 : assez sûr, mais qui rapporte quand même. « 10 € → » = ce que tu touches si tu gagnes. « passé » = combien de fois ce genre de pari est vraiment passé sur les saisons précédentes."],
   quasi: ['Les quasi-sûrs', "Les paris annoncés à 80 % de chances ou plus. Le % « passé » montre combien de fois ce genre de pari est vraiment passé sur les saisons précédentes."],
   generateur: ['Générateur de combiné', "Choisis la cote que tu vises (curseur) et le nombre de paris (− / +) : le site cherche les paris les plus probables pour l'atteindre."],
   modele: ['Comment le site calcule', "Le site mélange les cotes des bookmakers (90 %) et notre modèle (10 %) : force des équipes (Elo), buts, tirs cadrés, forme. Il se règle tout seul chaque lundi."],
@@ -1056,7 +1154,7 @@ function showHelp() {
     + '<div class="card pad section"><h3 style="margin-top:0">📱 L\'appli en 30 secondes</h3><ol class="help-steps">'
     + '<li><b>Matchs</b> : choisis un jour (ou glisse l\'écran à gauche / à droite). Chaque carte montre les chances de chaque équipe et notre prono.</li>'
     + '<li>Touche un match pour voir <b>la fiche</b> : pourquoi ce prono, stats, compos, buteurs, et le direct pendant le match.</li>'
-    + '<li><b>🎯 Combiné du jour</b> et <b>✅ Quasi-sûrs</b> en haut : nos paris les plus solides.</li>'
+    + '<li><b>🎯 Combiné du jour</b> et <b>paris à cote 1,20 – 1,80</b> en haut : nos paris les plus solides.</li>'
     + '<li><b>Combinés</b> : fabrique ton combiné (curseur de cote, nombre de paris) et garde-le dans « Mon combiné ».</li>'
     + '<li><b>Perf</b> : la réussite réelle du site, vérifiée match après match.</li>'
     + '<li>Tire l\'écran vers le bas pour actualiser. Glisse une fiche vers le bas pour la fermer.</li></ol></div>'
@@ -1072,7 +1170,7 @@ function showHelp() {
 const TOUR = [
   ['👋', 'Bienvenue sur Layan Pronos', "Le site calcule les chances de chaque match de foot à partir des cotes des bookmakers et de nos statistiques. Tout se met à jour tout seul."],
   ['📊', 'Lire un match', "Les 3 cases donnent les chances de victoire de chaque équipe et du nul. La case verte = l'issue la plus probable. Les petites barres = notre confiance : vert = sûr, rouge = risqué."],
-  ['🎯', 'Nos meilleurs paris', "En haut de l'écran : le combiné du jour (le plus probable pour une cote d'environ 2) et les quasi-sûrs (paris à 80 % ou plus). Touche ☆ pour mettre un match en favori."],
+  ['🎯', 'Nos meilleurs paris', "En haut de l'écran : le combiné du jour (le plus probable pour une cote d'environ 2) et les paris à cote 1,20 – 1,80, les plus probables qui rapportent quelque chose. Touche ☆ pour mettre un match en favori."],
   ['🧾', 'Ton combiné', "Ajoute des paris avec « + », remplace les cotes par celles de Betclic et vois tes gains possibles. Un « ? » à côté d'un mot = son explication. Bon match !"],
 ];
 function startTour(i = 0) {
@@ -1105,7 +1203,7 @@ function updatePill() {
   view.addEventListener('touchmove', (e) => {
     if (x0 == null) return;
     const dy = e.touches[0].clientY - y0;
-    if (window.scrollY <= 0 && dy > 0 && Math.abs(e.touches[0].clientX - x0) < 40) { pull = dy; ind.style.transform = 'translate(-50%,' + Math.min(70, dy / 2) + 'px)'; ind.style.opacity = Math.min(1, dy / 120); ind.classList.toggle('ready', dy > 120); }
+    if (window.scrollY <= 0 && dy > 0 && Math.abs(e.touches[0].clientX - x0) < 40) { pull = dy; ind.style.transform = 'translate(-50%,' + Math.min(70, dy / 2) + 'px)'; ind.style.opacity = Math.min(1, dy / 120); if ((dy > 120) !== ind.classList.contains('ready')) haptic(dy > 120 ? 'medium' : 'tick'); ind.classList.toggle('ready', dy > 120); }
   }, { passive: true });
   view.addEventListener('touchend', (e) => {
     if (x0 == null) return;
