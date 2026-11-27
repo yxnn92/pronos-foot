@@ -1,0 +1,41 @@
+# Réglage automatique du modèle, chaque lundi à 6h (Paris) : nouvelles cotes passées, nouveaux tirs,
+# puis on rejoue les 12 derniers mois pour choisir les meilleurs réglages (scripts/tune.mjs).
+name: Recalibrage du modèle
+
+on:
+  schedule:
+    - cron: '7 5 * * 1'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['scripts/tune.mjs', 'scripts/lib-sim.mjs', '.github/workflows/recalibrage.yml']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pronos
+  cancel-in-progress: false
+
+jobs:
+  tune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Cotes passées (football-data)
+        run: node scripts/fd.mjs
+      - name: Tirs des nouveaux matchs (ESPN)
+        run: node scripts/collect.mjs
+      - name: Réglage automatique
+        run: node scripts/tune.mjs
+      - name: Enregistrer
+        run: |
+          git config user.name "pronos-bot"
+          git config user.email "pronos-bot@users.noreply.github.com"
+          git add data/params.json data/calibration.json data/cache/fd data/cache/matchstats.json
+          git diff --cached --quiet || git commit -m "Recalibrage automatique du modèle"
+          git pull --rebase --autostash || true
+          git push

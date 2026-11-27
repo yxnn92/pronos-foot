@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 // Compétitions affichées sur le site (code ESPN → nom français).
 export const DISPLAY = [
   { slug: 'eng.1', name: 'Premier League', short: 'PL', type: 'league', tier: 1 },
@@ -45,11 +49,31 @@ export const LEAGUE_START = {
 };
 export const START_DEFAULT = 1380; // clubs vus seulement en coupe d'Europe (petits pays)
 
-export const HOME_ADV = 50;      // avantage du terrain, en points Elo (clubs), réglé par backtest
+// ---------- Réglages du modèle ----------
+// Valeurs par défaut (backtest du 25/11/2026), remplacées automatiquement chaque semaine
+// par le réglage automatique (scripts/tune.mjs → data/params.json).
+const DEFAULTS = {
+  MODEL_WEIGHT: 0.1, // part du modèle face aux cotes (les cotes Bet365 seules sont les plus précises)
+  HA: 50,            // avantage du terrain, en points Elo (clubs)
+  K: 20,             // vitesse de mise à jour de l'Elo
+  KE: 1.5,           // les matchs de coupe d'Europe comptent plus : ils comparent les championnats
+  eloMix: 0.6,       // écart de niveau : part Elo (le reste : Dixon-Coles avec tirs)
+  formAlpha: 0.3,    // calcul des buts : part des vrais buts (le reste : tirs cadrés)
+  dcAlpha: 0.5,      // Dixon-Coles : part des vrais buts (le reste : tirs cadrés)
+  dcXi: 0.005,       // Dixon-Coles : vitesse d'oubli des vieux matchs
+};
+let tuned = {};
+try {
+  const f = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'params.json');
+  if (fs.existsSync(f)) tuned = JSON.parse(fs.readFileSync(f, 'utf8')).params || {};
+} catch (e) { tuned = {}; }
+export const PARAMS = { ...DEFAULTS, ...tuned };
+
+export const HOME_ADV = PARAMS.HA;
 export const HOME_ADV_NAT = 90;  // sélections, quand le match n'est pas sur terrain neutre
-export const K_CLUB = 20;
-export const K_EURO = 1.5;       // les matchs de coupe d'Europe comptent plus : ils comparent les championnats
-export const MODEL_WEIGHT = 0.1;  // part du modèle face aux cotes (backtest : les cotes Bet365 seules sont les plus précises, le modèle sert surtout sans cotes)
+export const K_CLUB = PARAMS.K;
+export const K_EURO = PARAMS.KE;
+export const MODEL_WEIGHT = PARAMS.MODEL_WEIGHT;
 export const VALUE_EDGE = 0.05;  // value bet si probabilité × cote ≥ 1,05
 export const MAX_GAP = 0.15;     // pas de value si le modèle et le marché diffèrent de plus de 15 points
 export const DAYS_AHEAD = 7;

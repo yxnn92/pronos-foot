@@ -1,6 +1,6 @@
 // Modèle de pronostics : force Elo (qui gagne) + attaque/défense (combien de buts),
 // puis loi de Poisson pour obtenir la probabilité de chaque score.
-import { LEAGUE_START, START_DEFAULT, HOME_ADV, HOME_ADV_NAT, K_CLUB, K_EURO, MODEL_WEIGHT, VALUE_EDGE, MAX_GAP } from './config.mjs';
+import { LEAGUE_START, START_DEFAULT, HOME_ADV, HOME_ADV_NAT, K_CLUB, K_EURO, MODEL_WEIGHT, VALUE_EDGE, MAX_GAP, PARAMS } from './config.mjs';
 
 const MAXG = 10;
 const RHO = -0.06; // correction Dixon-Coles des petits scores (0-0, 1-1 un peu plus fréquents)
@@ -124,7 +124,7 @@ export function buildRatings(results, nationElo, stats = {}) {
   for (const r of sorted) {
     // Quand les tirs cadrés sont connus : 30 % vrais buts + 70 % tirs cadrés × 0,32 (plus stable que les buts seuls).
     const st = stats[r.id], hasSot = st?.sot?.[0] != null && st?.sot?.[1] != null;
-    const g = (i, real) => (hasSot ? 0.3 * real + 0.7 * st.sot[i] * 0.32 : real);
+    const g = (i, real) => (hasSot ? PARAMS.formAlpha * real + (1 - PARAMS.formAlpha) * st.sot[i] * 0.32 : real);
     for (const [t, gf, ga] of [[r.h, g(0, r.hs), g(1, r.as)], [r.a, g(1, r.as), g(0, r.hs)]]) {
       const f = form.get(t) || { gf: 0, ga: 0, n: 0 };
       const decay = 0.98; // demi-vie d'environ 35 matchs (réglé par backtest : meilleur que 10)
@@ -132,7 +132,7 @@ export function buildRatings(results, nationElo, stats = {}) {
       form.set(t, f);
     }
   }
-  const dc = fitDC(sorted, stats, Date.now());
+  const dc = fitDC(sorted, stats, Date.now(), { xi: PARAMS.dcXi, k: 3, alpha: PARAMS.dcAlpha });
   const get = (id, nat, name) => {
     if (nat) return nationElo(name) ?? 1500;
     return elo.get(id) ?? START_DEFAULT;
@@ -173,7 +173,7 @@ export function predict({ hId, aId, hName, aName, nat, neutral, ratings, market,
   if (!nat && dc?.att.has(hId) && dc?.att.has(aId)) {
     const hf = neutral ? 1 : dc.home;
     const dlh = dc.mu * hf * dc.att.get(hId) * dc.def.get(aId), dla = dc.mu * dc.att.get(aId) * dc.def.get(hId);
-    sModel = 0.6 * sModel + 0.4 * Math.max(-total + 0.2, Math.min(total - 0.2, dlh - dla));
+    sModel = PARAMS.eloMix * sModel + (1 - PARAMS.eloMix) * Math.max(-total + 0.2, Math.min(total - 0.2, dlh - dla));
   }
   // Absences (blessés, suspendus, compo) : on baisse les buts attendus de l'équipe privée de ses buteurs/passeurs.
   // Appliqué au modèle seulement : les cotes du marché tiennent déjà compte des absences connues.

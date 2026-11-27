@@ -1,0 +1,42 @@
+{
+  "updatedAt": "2026-11-27T10:02:27.822Z",
+  "period": {
+    "from": "2025-11-27",
+    "matches": 2280
+  },
+  "adopted": false,
+  "params": {
+    "MODEL_WEIGHT": 0.1,
+    "HA": 50,
+    "K": 20,
+    "KE": 1.5,
+    "eloMix": 0.6,
+    "formAlpha": 0.3,
+    "dcAlpha": 0.5,
+    "dcXi": 0.005
+  },
+  "before": {
+    "n": 2280,
+    "loss": 1.63831,
+    "ll1x2": 0.9666,
+    "llGoals": 0.6717,
+    "acc1x2": 54.8,
+    "accGoals": 58.4,
+    "params": {
+      "MODEL_WEIGHT": 0.1,
+      "HA": 50,
+      "K": 20,
+      "eloMix": 0.6,
+      "formAlpha": 0.3,
+      "dcAlpha": 0.5
+    }
+  },
+  "after": {
+    "n": 2280,
+    "loss": 1.63831,
+    "ll1x2": 0.9666,
+    "llGoals": 0.6717,
+    "acc1x2": 54.8,
+    "accGoals": 58.4
+  }
+}

@@ -281,6 +281,7 @@ const de = (n) => (/^[aeiouyhéèâî]/i.test(n) ? `d'${n}` : `de ${n}`);
 // ---------- combiné du jour ----------
 // Le plus probable possible pour une cote totale entre 1,85 et 2,50 (cotes France estimées),
 // 2 à 4 paris sur des matchs différents, parmi 1N2 / double chance / buts.
+const boring = (l) => (l.type === 'DC' && l.key === '12') || (l.type === 'Buts' && /^u/.test(l.key || ''));
 function dailyCombo(ms) {
   const legs = [];
   for (const m of ms) {
@@ -296,6 +297,8 @@ function dailyCombo(ms) {
     if (chosen.length === 4 || o > 2.5) return;
     for (let i = start; i < L.length; i++) {
       if (chosen.some((c) => c.mid === L[i].mid)) continue;
+      // au plus 1 pari « moins de … buts » ou « X ou Y » (peu intéressants) par combiné
+      if (boring(L[i]) && chosen.some(boring)) continue;
       chosen.push(L[i]); rec(i + 1, chosen, o * L[i].odds, p * L[i].p); chosen.pop();
     }
   };

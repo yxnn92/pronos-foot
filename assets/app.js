@@ -5,7 +5,7 @@ const view = $('#view');
 const TZ = 'Europe/Paris';
 const ESPN = 'https://site.api.espn.com/apis/site/v2/sports/soccer';
 const state = { tab: 'matchs', day: null, comp: 'all', valueOnly: false, q: '', standing: null, stView: 'table', pSort: 'pd', pComp: 'all', pValue: false };
-let M = null, S = null, HIST = null, COMBOS = {}, CAL = null, loadedAt = 0, modalDraw = null, modalId = null;
+let M = null, S = null, HIST = null, COMBOS = {}, CAL = null, PARAMS = null, loadedAt = 0, modalDraw = null, modalId = null;
 
 // ---------- formats ----------
 const fmt = (opts) => new Intl.DateTimeFormat('fr-FR', { timeZone: TZ, ...opts });
@@ -38,8 +38,8 @@ const debounce = (f, ms) => { let t; return (...a) => { clearTimeout(t); t = set
 // ---------- chargement ----------
 async function load() {
   const get = (f) => fetch(`data/${f}?v=${Math.floor(Date.now() / 6e4)}`).then((r) => r.json());
-  const [m, s, h, c, cal] = await Promise.all([get('matches.json'), get('standings.json'), get('history.json'), get('combos.json').catch(() => ({})), get('calibration.json').catch(() => null)]);
-  M = m; S = s; HIST = h; COMBOS = c || {}; CAL = cal; loadedAt = Date.now();
+  const [m, s, h, c, cal, prm] = await Promise.all([get('matches.json'), get('standings.json'), get('history.json'), get('combos.json').catch(() => ({})), get('calibration.json').catch(() => null), get('params.json').catch(() => null)]);
+  M = m; S = s; HIST = h; COMBOS = c || {}; CAL = cal; PARAMS = prm; loadedAt = Date.now();
   const upd = new Date(M.updatedAt);
   $('#updated').textContent = `Pronos mis à jour ${fDayShort.format(upd)} à ${fTime.format(upd)}`;
   render();
@@ -112,6 +112,23 @@ function bigScore(m) {
   return `<b>${m.hs ?? 0} - ${m.as ?? 0}</b><small>${m.state === 'in' ? `<i class="dot-live"></i> ${esc(trDetail(m.detail) || 'En direct')}` : esc(trDetail(m.detail) || 'Terminé')}</small>`;
 }
 
+// ---------- favoris (gardés sur ce téléphone) ----------
+let favs = new Set();
+try { favs = new Set(JSON.parse(localStorage.getItem('favoris') || '[]')); } catch (e) {}
+const isFav = (id) => favs.has(id);
+function toggleFav(id) {
+  if (favs.has(id)) { favs.delete(id); toast('Retiré des favoris'); } else { favs.add(id); toast('⭐ Ajouté aux favoris'); }
+  // on oublie les favoris des matchs qui ne sont plus affichés
+  const ids = new Set(M.matches.map((m) => m.id)); favs = new Set([...favs].filter((x) => ids.has(x)));
+  try { localStorage.setItem('favoris', JSON.stringify([...favs])); } catch (e) {}
+}
+const favBtn = (id) => '<button class="fav ' + (isFav(id) ? 'on' : '') + '" data-fav="' + id + '" aria-label="Favori" title="' + (isFav(id) ? 'Retirer des favoris' : 'Mettre en favori') + '">' + (isFav(id) ? '★' : '☆') + '</button>';
+function favsHtml() {
+  const list = M.matches.filter((m) => isFav(m.id)).sort((a, b) => a.date.localeCompare(b.date));
+  if (!list.length) return '';
+  return '<h2>⭐ Mes favoris</h2><div class="mlist">' + list.map(matchCard).join('') + '</div>';
+}
+
 function matchCard(m) {
   const p = m.pred.p, mp = mainPick(m), vs = values(m), mv = oddsMove(m);
   const moved = mv?.find((x) => x.k === mp.key && Math.abs(x.diff) >= 0.05);
@@ -136,6 +153,7 @@ function matchCard(m) {
       ${bigMatch(m) ? '<span class="tag big">🔥 Choc</span>' : ''}${absCount(m) ? `<span class="tag lose" title="Blessés / suspendus">🚑 ${absCount(m)}</span>` : ''}
       ${verdictTag(v)}
       ${m.result?.void ? `<span class="tag">${esc(m.result.note)}</span>` : ''}
+      ${favBtn(m.id)}
     </div>
     ${m.state === 'pre' && m.trends?.length ? `<div class="mc-trend">${TREND_ICON[m.trends[0].kind] || '📊'} ${esc(m.trends[0].text)}</div>` : ''}
   </article>`;
@@ -247,6 +265,16 @@ function dailyComboHtml() {
     + '<div class="row-between">' + (status || '<span class="small muted">Le plus probable pour une cote ≈ 2. Figé au 1er coup d\'envoi, suivi dans Performance.</span>')
     + (!c.result ? '<button class="btn-sm" data-addall="' + esc(ids) + '">+ Mon combiné</button>' : '') + '</div></div>';
 }
+// Dernier réglage automatique du modèle (chaque lundi)
+const fx = (v) => String(v).replace('.', ',');
+function tuneHtml() {
+  if (!PARAMS?.updatedAt) return '';
+  const a = PARAMS.after, b = PARAMS.before, d = new Date(PARAMS.updatedAt);
+  return '<div class="card pad section"><div class="eyebrow">🔄 Réglage automatique du modèle</div><p class="small" style="margin:8px 0 0">Dernier réglage le ' + fDay.format(d) + ', testé sur ' + a.n + ' matchs des 12 derniers mois. '
+    + (PARAMS.adopted ? '<b>Nouveau réglage adopté</b> : réussite 1N2 ' + fx(b.acc1x2) + ' % → ' + fx(a.acc1x2) + ' %, buts ' + fx(b.accGoals) + ' % → ' + fx(a.accGoals) + ' %.'
+      : 'Réglage conservé (aucune amélioration nette) : réussite 1N2 ' + fx(a.acc1x2) + ' %, buts ' + fx(a.accGoals) + ' %.')
+    + '</p><p class="note" style="margin-bottom:0">Chaque lundi, le site rejoue les matchs récents avec d\'autres réglages et ne garde un changement que s\'il améliore nettement les prévisions.</p></div>';
+}
 function comboPerfHtml() {
   const done = Object.values(COMBOS).filter((c) => c.result && !c.result.void);
   if (!done.length) return '<div class="card pad section"><div class="eyebrow">🎯 Combiné du jour</div><p class="small muted" style="margin:6px 0 0">Suivi en cours : ' + Object.keys(COMBOS).length + ' combiné(s) proposé(s), pas encore de résultat.</p></div>';
@@ -285,7 +313,7 @@ function renderMatchs() {
       </div>
       <div class="hero-foot"><span class="pick">${esc(mp.label)}${mp.odds ? ' · ' + odd(mp.odds) : ''}</span>${conf(mp.stars)}<div class="ring" style="--p:${pctN(mp.p)}"><span>${pctN(mp.p)}%</span></div></div>
     </div>` : ''}
-    ${!state.q ? dailyComboHtml() + surePicksHtml(8) : ''}
+    ${!state.q ? favsHtml() + dailyComboHtml() + surePicksHtml(8) : ''}
     ${live.length && !state.q ? `<h2><i class="dot-live"></i> En direct</h2><div class="mlist">${live.map(matchCard).join('')}</div>` : ''}
     <div class="filters">
       <div class="days">${days.map((d) => `<button class="day ${d === state.day && !state.q ? 'active' : ''}" data-day="${d}"><small>${wd(d)}</small><b>${noon(d).getUTCDate()}</b><span class="n">${count(d)} m.</span></button>`).join('')}</div>
@@ -368,13 +396,17 @@ function playerLegs(m) {
   for (const pl of [...m.players.h, ...m.players.a]) for (const t of Object.keys(PLAYER_TYPES)) out.push(legFor(m, t, pl.id));
   return out.filter((l) => l && l.p >= 0.15 && l.p <= 0.95 && l.odds >= 1.05);
 }
-function allLegs(m, withPlayers = false) {
+// Paris peu intéressants qu'on limite dans les suggestions : « moins de … buts » et « X ou Y » (double chance sans le nul)
+const isBoring = (l) => (l.type === 'DC' && l.key === '12') || (l.type === 'Buts' && /^u/.test(l.key || ''));
+let allowBoring = false;
+try { allowBoring = localStorage.getItem('parisClassiques') === '1'; } catch (e) {}
+function allLegs(m, withPlayers = false, all = false) {
   const out = [];
   for (const k of ['h', 'd', 'a']) out.push(legFor(m, '1N2', k));
   for (const k of ['1N', 'N2', '12']) out.push(legFor(m, 'DC', k));
   for (const L of ['0.5', '1.5', '2.5', '3.5']) { out.push(legFor(m, 'Buts', 'o' + L)); out.push(legFor(m, 'Buts', 'u' + L)); }
   out.push(legFor(m, 'BTTS', 'yes'), legFor(m, 'BTTS', 'no'));
-  const legs = out.filter((l) => l && l.p >= 0.15 && l.p <= 0.97 && l.odds >= 1.05);
+  const legs = out.filter((l) => l && l.p >= 0.15 && l.p <= 0.97 && l.odds >= 1.05 && (all || allowBoring || !isBoring(l)));
   return withPlayers ? legs.concat(playerLegs(m)) : legs;
 }
 const legById = (id, allowAbsent = false) => { const [mid, type, key] = id.split('|'); const m = M.matches.find((x) => x.id === mid); return m ? legFor(m, type, key, allowAbsent) : null; };
@@ -501,6 +533,7 @@ function renderCombis() {
       <div class="filters" style="margin:4px 0 12px">
         <div class="segmented">${[[1, "Aujourd'hui"], [2, '48 h'], [7, '7 jours']].map(([d, l]) => `<button class="${cState.period === d ? 'active' : ''}" data-period="${d}">${l}</button>`).join('')}</div>
         <label class="switch"><input type="checkbox" id="withPlayers" ${wp ? 'checked' : ''}><span class="sw"></span>Inclure les joueurs <span class="small muted">(au moins 1 pari buteur, passeur ou décisif)</span></label>
+        <label class="switch"><input type="checkbox" id="withBoring" ${allowBoring ? 'checked' : ''}><span class="sw"></span>Autoriser « moins de … buts » et « X ou Y »</label>
       </div>
       <div class="gen-ctrls">
         <div class="ctrl"><label>Cote visée <b id="tVal">${odd(cState.target)}</b></label>
@@ -539,6 +572,7 @@ function renderCombis() {
   const tr = $('#tRange');
   tr.oninput = () => { $('#tVal').textContent = odd(sliderToOdds(+tr.value)); };
   tr.onchange = () => { cState.target = sliderToOdds(+tr.value); resetGen(); render(); };
+  $('#withBoring').onchange = (e) => { allowBoring = e.target.checked; try { localStorage.setItem('parisClassiques', allowBoring ? '1' : '0'); } catch (x) {} resetGen(); render(); };
   $('#withPlayers').onchange = (e) => { cState.players = e.target.checked; try { localStorage.setItem('combiJoueurs', cState.players ? '1' : '0'); } catch (x) {} resetGen(); render(); };
   $('#reroll')?.addEventListener('click', () => { for (const l of cState.last?.legs || []) cState.seen.add(l.id); cState.seed++; render(); });
   view.querySelectorAll('[data-addall]').forEach((b) => b.onclick = () => { const ids = b.dataset.addall.split(','); ids.forEach((id) => addLeg(id, true)); toast(`${ids.length} paris ajoutés à ton combiné`); render(); });
@@ -623,7 +657,7 @@ function renderPerf() {
   const picks = done.flatMap((h) => h.picks.filter((p) => p.win != null).map((p) => ({ ...p, h })));
   const pending = Object.values(HIST).filter((h) => !h.result).length;
   if (!picks.length) {
-    view.innerHTML = `<h2>📈 Performance</h2>${comboPerfHtml()}<div class="card pad empty"><div style="font-size:36px">⏳</div><b>Le suivi démarre</b><br>Pas encore de match terminé avec un prono enregistré avant le coup d'envoi.<br>${pending} pronos attendent leur résultat.</div>`;
+    view.innerHTML = `<h2>📈 Performance</h2>${comboPerfHtml()}${tuneHtml()}<div class="card pad empty"><div style="font-size:36px">⏳</div><b>Le suivi démarre</b><br>Pas encore de match terminé avec un prono enregistré avant le coup d'envoi.<br>${pending} pronos attendent leur résultat.</div>`;
     return;
   }
   const agg = (arr) => { const n = arr.length, w = arr.filter((p) => p.win).length; return { n, w, r: n ? w / n : 0 }; };
@@ -645,7 +679,7 @@ function renderPerf() {
       ${kpi(`<span class="${pr.s >= 0 ? 'up' : 'down'}">${pr.s >= 0 ? '+' : ''}${pr.s.toFixed(1)} u</span>`, `Gains fictifs · ROI ${pr.roi >= 0 ? '+' : ''}${(pr.roi * 100).toFixed(1)} %`)}
       ${kpi(done.length, `Matchs suivis · ${pending} en attente`)}
     </div>
-    ${comboPerfHtml()}
+    ${comboPerfHtml()}${tuneHtml()}
     ${table('Par type de prono', rowsBy((p) => p.type, (k) => TYPE_NAMES[k] || k), 'Type')}
     ${table('Par niveau de confiance', rowsBy((p) => p.stars, (k) => conf(+k), (a, b) => b[0] - a[0]), 'Confiance')}
     ${table('Par compétition', rowsBy((p) => p.h.slug, (k) => esc(comp(k).name)), 'Compétition')}
@@ -667,6 +701,7 @@ function openMatch(id) {
     body.innerHTML = `
       <div class="fiche-head">
         <div class="comp">${img(comp(cur.slug).logo, '')} ${esc(comp(cur.slug).name)} · ${fDay.format(new Date(cur.date))}</div>
+        <div class="head-fav">${favBtn(cur.id)}</div>
         <div class="fiche-teams"><div class="t"><span class="crest">${img(cur.h.logo, '')}</span>${esc(cur.h.short)}</div><div class="mid">${bigScore(cur)}</div><div class="t"><span class="crest">${img(cur.a.logo, '')}</span>${esc(cur.a.short)}</div></div>
         ${cur._live?.scorers ? `<div class="head-goals"><div>${cur._live.scorers.h.map(esc).join('<br>')}</div><div>${cur._live.scorers.a.map(esc).join('<br>')}</div></div>` : ''}
       </div>
@@ -780,7 +815,7 @@ function fichePronos(m) {
   const addBtn = (id) => (m.state === 'pre' ? `<button class="add" data-add="${esc(id)}" aria-label="Ajouter à mon combiné" title="Ajouter à mon combiné">+</button>` : '');
   const pickLine = (x) => `<div class="pick-card"><div><div class="k">${TYPE_NAMES[x.type]}</div><b>${esc(x.label)}</b>${x.edge ? ` <span class="tag value">+${Math.round(x.edge * 100)} %</span>` : ''}</div>
     <div style="display:flex;align-items:center;gap:10px"><div style="text-align:right">${conf(x.stars)}<div class="small" style="margin-top:3px"><b>${pct(x.p)}</b>${x.odds ? ' · ' + odd(x.odds) + (x.est ? '≈' : '') : ''}</div>${verdictTag(verdict(m, x))}</div>${addBtn(pickId(x))}</div></div>`;
-  const legs = m.state === 'pre' ? allLegs(m) : [];
+  const legs = m.state === 'pre' ? allLegs(m, false, true) : [];
   return `
     ${m.why ? `<div class="card pad section why"><div class="eyebrow">💬 Pourquoi ce prono</div><p>${esc(m.why)}</p>
       ${m.trends?.length ? `<div class="trends">${m.trends.map((t) => `<div class="trend ${t.kind}"><span>${TREND_ICON[t.kind] || '📊'}</span>${esc(t.text)}</div>`).join('')}</div>` : ''}</div>` : ''}
@@ -959,12 +994,16 @@ function render() {
 }
 $('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; state.tab = b.dataset.tab; render(); window.scrollTo({ top: 0 }); };
 view.addEventListener('click', (e) => {
+  const fv = e.target.closest('[data-fav]');
+  if (fv) { e.stopPropagation(); toggleFav(fv.dataset.fav); render(); return; }
   // bouton « + Mon combiné » du combiné du jour (onglet Matchs ; l'onglet Combinés gère le sien)
   const add = e.target.closest('[data-addall]');
   if (add && state.tab !== 'combis') { const ids = add.dataset.addall.split(','); ids.forEach((id) => addLeg(id, true)); toast(`${ids.length} paris ajoutés à ton combiné`); updateMyCount(); return; }
   const c = e.target.closest('[data-id]'); if (c && !e.target.closest('input,select,button,label')) openMatch(c.dataset.id); });
 $('#closeModal').onclick = () => closeModal();
-$('#modalBody').addEventListener('click', (e) => { const b = e.target.closest('[data-add]'); if (b) { addLeg(b.dataset.add); b.classList.add('added'); } });
+$('#modalBody').addEventListener('click', (e) => {
+  const fv = e.target.closest('[data-fav]');
+  if (fv) { toggleFav(fv.dataset.fav); if (modalDraw) modalDraw(); render(); return; } const b = e.target.closest('[data-add]'); if (b) { addLeg(b.dataset.add); b.classList.add('added'); } });
 $('#modal').onclick = (e) => { if (e.target.id === 'modal') closeModal(); };
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 $('#themeBtn').onclick = () => {
