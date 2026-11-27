@@ -1209,11 +1209,24 @@ function renderNbaMatchs() {
   }
   view.innerHTML = html || '<div class="card empty">Pas de match NBA dans les 48 prochaines heures.</div>';
 }
-function renderNbaSemaine() { renderNbaMatchs(); }
+function renderNbaSemaine() {
+  const week = (NB.week || []).slice().sort((a, b) => a.date.localeCompare(b.date));
+  const nights = [...new Set(week.map((g) => nightKeyNba(g.date)))].sort();
+  let html = '<h2>🗓️ Les 7 prochaines nuits NBA</h2><p class="note">Heure de Paris. Chances calculées par le modèle (les cotes et les blessés sont ajoutés le jour du match). 😴 = 2e match en 2 soirs.</p>';
+  for (const k of nights) {
+    const gs = week.filter((g) => nightKeyNba(g.date) === k);
+    html += '<div class="day-head">🏀 ' + esc(nightLabel(k)) + ' <span class="small muted">' + gs.length + ' matchs</span></div><div class="card" style="overflow:hidden">'
+      + gs.map((g) => { const fav = g.pH >= 0.5 ? g.h : g.a, pf = Math.max(g.pH, 1 - g.pH); const inWin = NB.games.some((x) => x.id === g.id);
+        return '<div class="mini nba-mini"' + (inWin ? ' data-nba="' + g.id + '"' : '') + '><div class="t">' + fTime.format(new Date(g.date)) + '</div>'
+          + '<div class="n">' + img(g.a.logo) + esc(g.a.abbr) + ' <span class="muted">@</span> ' + img(g.h.logo) + esc(g.h.abbr) + (g.b2b.length ? ' <span class="tag big" style="padding:2px 6px">😴 ' + esc(g.b2b.join(', ')) + '</span>' : '') + (g.cup ? ' 🏆' : '') + '</div>'
+          + '<div style="text-align:right"><b>' + esc(fav.abbr) + ' ' + pctN(pf) + ' %</b><div class="small muted">≈ ' + g.total + ' pts</div></div></div>'; }).join('') + '</div>';
+  }
+  view.innerHTML = nights.length ? html : '<div class="card empty">Pas de match NBA dans les 7 prochains jours.</div>';
+}
 function renderNbaCombis() {
   const props = NB.games.filter((g) => g.state === 'pre').flatMap((g) => g.props.map((p) => ({ ...p, g }))).filter((p) => p.p >= 0.6 && !p.injured).sort((a, b) => b.p - a.p).slice(0, 20);
   view.innerHTML = `<h2>🏀 Combinés NBA</h2>${nbaComboHtml()}${nbaSolidHtml(12)}
-    <h2>⛹️ Paris joueurs de la nuit</h2><p class="note">Calculés avec les moyennes du joueur (saison + 10 derniers matchs), la défense adverse et les absents. Cotes ≈ estimées : ESPN ne donne pas les cotes joueurs.</p>
+    <h2>⛹️ Paris joueurs de la nuit</h2><p class="note">Probabilités vérifiées sur 50 000 paris passés (annoncé 74 % → réel 74 %). Cotes ≈ estimées : ESPN ne donne pas les cotes joueurs.</p>
     <div class="card" style="overflow:hidden">${props.map((p) => `<div class="player" data-nba="${p.g.id}" style="grid-template-columns:auto minmax(0,1fr) auto auto">${img(p.head, 'logo', 'width:34px;height:34px;border-radius:50%;object-fit:cover;background:var(--surface-2)')}<div class="pn"><b>${esc(p.label)}</b><small>${esc(p.g.a.abbr)} @ ${esc(p.g.h.abbr)} · projection ${String(p.proj).replace('.', ',')}</small></div><span class="v">${pct(p.p)}</span><button class="add" data-add="${esc(`nba|${p.g.id}|PROP|${p.pid}:${p.stat}:${p.line}`)}">+</button></div>`).join('') || '<div class="empty">Pas encore de paris joueurs.</div>'}</div>
     <p class="note">Ton combiné (foot + NBA) se trouve dans ⚽ Foot → Combinés → Mon combiné.</p>`;
 }
@@ -1269,7 +1282,7 @@ function openNbaGame(id) {
   modalDraw = () => {
     const g = NB.games.find((x) => x.id === id);
     if (!g) { body.innerHTML = '<div class="fiche-body"><div class="card empty">Match introuvable.</div></div>'; if (!g0) fetchNbaLive({ id }).then(() => {}); return; }
-    const tabs = [...(g.state !== 'pre' ? [['live', g.state === 'in' ? '● Direct' : 'Feuille de match']] : []), ['pronos', 'Pronos'], ['joueurs', 'Joueurs'], ['infos', 'Blessés & forme']];
+    const tabs = [...(g.state !== 'pre' ? [['live', g.state === 'in' ? '● Direct' : 'Feuille de match']] : []), ['pronos', 'Pronos'], ['joueurs', 'Joueurs'], ['infos', 'Cinq & blessés']];
     const mid = g.state === 'pre' ? `<b>${fTime.format(new Date(g.date))}</b><small>${fDayShort.format(new Date(g.date))}</small>` : `<b>${g.hs} - ${g.as}</b><small>${g.state === 'in' ? `<i class="dot-live"></i> QT${g.period} ${esc(g.clock || '')}` : esc(g.detail || 'Terminé')}</small>`;
     body.innerHTML = `<div class="fiche-head nba-head"><div class="comp">🏀 NBA${g.cup ? ' · NBA Cup' : ''} · ${fDay.format(new Date(g.date))}</div><div class="head-fav"></div>
       <div class="fiche-teams"><div class="t"><span class="crest">${img(g.h.logo, '')}</span>${esc(g.h.short)}<small style="opacity:.85">${esc(g.rec?.h?.all || '')} · dom. ${esc(g.rec?.h?.home || '')}</small></div><div class="mid">${mid}</div><div class="t"><span class="crest">${img(g.a.logo, '')}</span>${esc(g.a.short)}<small style="opacity:.85">${esc(g.rec?.a?.all || '')} · ext. ${esc(g.rec?.a?.road || '')}</small></div></div></div>
@@ -1295,14 +1308,16 @@ function nbaFichePronos(g) {
 }
 function nbaFicheJoueurs(g) {
   const side = (s) => { const list = g.props.filter((p) => p.team === s); return `<div class="card section" style="overflow:hidden"><div class="list-head">${img(g[s].logo, '')}${esc(g[s].short)}</div>${list.length ? list.map((p) => `<div class="player" style="grid-template-columns:auto minmax(0,1fr) auto auto">${img(p.head, 'logo', 'width:32px;height:32px;border-radius:50%;object-fit:cover;background:var(--surface-2)')}<div class="pn"><b>${esc(p.label.replace(p.name + ' : ', ''))}</b><small>${esc(p.name)} · projection ${String(p.proj).replace('.', ',')}${p.injured ? ' · ⚠️ ' + esc(STATUS_FR[p.injured] || p.injured) : ''}</small></div><span class="v">${pct(p.p)}<small class="muted" style="display:block;font-weight:600">${odd(p.odds)}≈</small></span>${g.state === 'pre' ? `<button class="add" data-add="${esc(`nba|${g.id}|PROP|${p.pid}:${p.stat}:${p.line}`)}">+</button>` : '<span></span>'}</div>`).join('') : '<div class="empty">Pas de paris joueurs.</div>'}</div>`; };
-  return side('h') + side('a') + '<p class="note">Projection = 55 % des 10 derniers matchs + 45 % de la saison, ajustée à la défense adverse et aux coéquipiers absents. Cotes ≈ estimées.</p>';
+  return side('h') + side('a') + '<p class="note">Probabilités réglées sur 50 000 paris joueurs passés : quand le site annonce 75 %, ça passe environ 3 fois sur 4. Points, rebonds, passes, 3 points, double-double, triple-double. Cotes ≈ estimées.</p>';
 }
 function nbaFicheInfos(g) {
   const r = g.pred.rest;
   const restTxt = (s) => { const d = r[s], b2b = r[s === 'h' ? 'b2bH' : 'b2bA']; return b2b ? '<span class="tag big">😴 2e match en 2 soirs</span>' : `<span class="tag">${d >= 3 ? '3 jours ou plus' : d + ' jour' + (d > 1 ? 's' : '')} de repos</span>`; };
   const inj = (s) => g.injuries[s].length ? g.injuries[s].map((i) => `<div class="abs-row"><span class="tag ${i.status === 'Out' ? 'lose' : 'big'}">${esc(STATUS_FR[i.status] || i.status)}</span><div><b>${esc(i.name)}</b><div class="small muted">${i.ppg ? String(i.ppg).replace('.', ',') + ' pts/match' : ''}${i.info ? ' · ' + esc(i.info) : ''}</div></div></div>`).join('') : '<div class="small muted">Aucun blessé signalé.</div>';
   const form = (s) => `<div class="form">${(g.form[s] || []).slice(0, 10).map((x) => `<b class="${x.w ? 'W' : 'L'}" title="${x.home ? 'vs' : '@'} ${esc(x.opp)} ${esc(x.s)}">${x.w ? 'V' : 'D'}</b>`).join('')}</div>`;
-  return `<div class="card pad section"><h3 style="margin-top:0">😴 Repos ${info('repos')}</h3>
+  const five = (s) => (g.starters?.[s] || []).map((p) => '<div class="five">' + img(p.head, 'logo', 'width:30px;height:30px;border-radius:50%;object-fit:cover;background:var(--surface-2)') + '<div><b>' + esc(p.name) + '</b><small>' + esc(p.pos || '') + ' · ' + String(p.pts).replace('.', ',') + ' pts' + (p.changed ? ' · <span class="up">nouveau</span>' : '') + '</small></div></div>').join('') || '<div class="small muted">Non disponible.</div>';
+  const startersHtml = g.state === 'pre' && g.starters ? '<div class="card pad section"><h3 style="margin-top:0">🏀 Cinq de départ probable</h3><div class="five-grid"><div><div class="five-team">' + img(g.h.logo, 'logo', 'width:18px;height:18px') + esc(g.h.abbr) + '</div>' + five('h') + '</div><div><div class="five-team">' + img(g.a.logo, 'logo', 'width:18px;height:18px') + esc(g.a.abbr) + '</div>' + five('a') + '</div></div><p class="note" style="margin-bottom:0">Selon les titulaires du dernier match, sans les absents. Le cinq officiel est connu au début du match (onglet Direct).</p></div>' : '';
+  return startersHtml + `<div class="card pad section"><h3 style="margin-top:0">😴 Repos ${info('repos')}</h3>
       <div class="row-between" style="margin:6px 0"><span style="display:flex;gap:8px;align-items:center;font-weight:600">${img(g.h.logo, 'logo', 'width:20px;height:20px')}${esc(g.h.short)}</span>${restTxt('h')}</div>
       <div class="row-between" style="margin:6px 0"><span style="display:flex;gap:8px;align-items:center;font-weight:600">${img(g.a.logo, 'logo', 'width:20px;height:20px')}${esc(g.a.short)}</span>${restTxt('a')}</div></div>
     <div class="card pad section"><h3 style="margin-top:0">🚑 Blessés (officiel)</h3><div style="margin:8px 0 4px"><b>${esc(g.h.short)}</b></div>${inj('h')}<div style="margin:12px 0 4px"><b>${esc(g.a.short)}</b></div>${inj('a')}</div>

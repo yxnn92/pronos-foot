@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['scripts/tune.mjs', 'scripts/lib-sim.mjs', 'scripts/nba-backtest.mjs', '.github/workflows/recalibrage.yml']
+    paths: ['scripts/tune.mjs', 'scripts/lib-sim.mjs', 'scripts/nba-backtest.mjs', 'scripts/nba-props-backtest.mjs', '.github/workflows/recalibrage.yml']
 
 permissions:
   contents: write
@@ -33,11 +33,13 @@ jobs:
         run: node scripts/tune.mjs
       - name: Réglage automatique NBA
         run: node scripts/nba-backtest.mjs || echo "NBA - reglage impossible"
+      - name: Réglage des paris joueurs NBA
+        run: node scripts/nba-props-backtest.mjs || echo "NBA - paris joueurs non regles"
       - name: Enregistrer
         run: |
           git config user.name "pronos-bot"
           git config user.email "pronos-bot@users.noreply.github.com"
-          git add data/params.json data/calibration.json data/nba-params.json data/cache/nba-*.json data/cache/fd data/cache/matchstats.json
+          git add data/params.json data/calibration.json data/nba-params.json data/nba-props-params.json data/cache/nba-*.json data/cache/fd data/cache/matchstats.json
           git diff --cached --quiet || git commit -m "Recalibrage automatique du modèle"
           git pull --rebase --autostash || true
           git push
