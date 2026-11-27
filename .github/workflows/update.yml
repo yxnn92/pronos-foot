@@ -37,7 +37,7 @@ jobs:
         run: node scripts/update.mjs
 
       - name: NBA (matchs de la nuit, blessés, pronos)
-        run: node scripts/nba.mjs || echo "NBA : échec de la mise à jour (le foot continue)"
+        run: node scripts/nba.mjs || echo "NBA en échec, le foot continue"
 
       - name: Enregistrer les nouvelles données
         run: |

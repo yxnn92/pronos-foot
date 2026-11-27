@@ -32,7 +32,7 @@ jobs:
       - name: Réglage automatique
         run: node scripts/tune.mjs
       - name: Réglage automatique NBA
-        run: node scripts/nba-backtest.mjs || echo "NBA : réglage impossible"
+        run: node scripts/nba-backtest.mjs || echo "NBA - reglage impossible"
       - name: Enregistrer
         run: |
           git config user.name "pronos-bot"
