@@ -69,9 +69,12 @@ async function load() {
   const get = (f) => fetch(`data/${f}?v=${Math.floor(Date.now() / 6e4)}`).then((r) => r.json());
   const [m, s, h, c, cal, prm] = await Promise.all([get('matches.json'), get('standings.json'), get('history.json'), get('combos.json').catch(() => ({})), get('calibration.json').catch(() => null), get('params.json').catch(() => null)]);
   M = m; S = s; HIST = h; COMBOS = c || {}; CAL = cal; PARAMS = prm; loadedAt = Date.now();
+  if (SPORT === 'nba' || my.some((x) => x.id.startsWith('nba|'))) { await loadNba().catch(() => {}); if (SPORT === 'nba') nbaLive(); }
+  document.body.dataset.sport = SPORT;
   const upd = new Date(M.updatedAt);
   $('#updated').textContent = `Pronos mis à jour ${fDayShort.format(upd)} à ${fTime.format(upd)}`;
   render();
+  updateSportBar();
   liveTick();
 }
 
@@ -479,7 +482,15 @@ function allLegs(m, withPlayers = false, all = false) {
   const legs = out.filter((l) => l && l.p >= 0.15 && l.p <= 0.97 && l.odds >= 1.05 && (all || allowBoring || !isBoring(l)));
   return withPlayers ? legs.concat(playerLegs(m)) : legs;
 }
-const legById = (id, allowAbsent = false) => { const [mid, type, key] = id.split('|'); const m = M.matches.find((x) => x.id === mid); return m ? legFor(m, type, key, allowAbsent) : null; };
+function nbaLegById(id) {
+  if (!NB) return null;
+  const [, gid, type, key] = id.split('|'); const g = NB.games.find((x) => x.id === gid); if (!g) return null;
+  let x = null;
+  if (type === 'PROP') { const [pid, stat, line] = key.split(':'); const p = g.props.find((q) => q.pid === pid && q.stat === stat && String(q.line) === line); x = p && { label: p.label, p: p.p, odds: p.odds, est: true }; }
+  else x = g.picks.find((q) => q.type === type && q.key === key);
+  return x ? { id, mid: 'nba:' + gid, type: 'NBA_' + type, key, label: '🏀 ' + x.label, p: x.p, odds: x.odds, est: x.est, match: g.a.abbr + ' @ ' + g.h.abbr, date: g.date, slug: 'nba' } : null;
+}
+const legById = (id, allowAbsent = false) => { if (id.startsWith('nba|')) return nbaLegById(id); const [mid, type, key] = id.split('|'); const m = M.matches.find((x) => x.id === mid); return m ? legFor(m, type, key, allowAbsent) : null; };
 // Alerte sur un pari de Mon combiné quand la compo ou les blessures changent la donne
 function legWarn(l) {
   if (l.gone) return '<span class="tag lose">⚠️ Match plus disponible</span>';
@@ -1088,16 +1099,297 @@ document.addEventListener('visibilitychange', () => {
   if (Date.now() - loadedAt > 10 * 60e3) load().catch(() => {}); else liveTick();
 });
 
+// =================== NBA ===================
+// Données recalculées par GitHub (data/nba*.json) ; scores et feuilles de match en direct lus chez ESPN.
+const NBA_API = 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba';
+let SPORT = 'foot';
+try { SPORT = localStorage.getItem('sport') === 'nba' ? 'nba' : 'foot'; } catch (e) {}
+let NB = null, NBH = {}, NBC = {}, NBP = null, nbaStand = 'est';
+async function loadNba() {
+  const get = (f) => fetch(`data/${f}?v=${Math.floor(Date.now() / 6e4)}`).then((r) => r.json());
+  const [a, b, c, d] = await Promise.all([get('nba.json'), get('nba-history.json').catch(() => ({})), get('nba-combos.json').catch(() => ({})), get('nba-params.json').catch(() => null)]);
+  NB = a; NBH = b || {}; NBC = c || {}; NBP = d;
+}
+function setSport(s) {
+  if (SPORT === s) return;
+  SPORT = s; haptic('medium');
+  try { localStorage.setItem('sport', s); } catch (e) {}
+  document.body.dataset.sport = s;
+  updateSportBar();
+  if (s === 'nba' && !NB) { view.innerHTML = '<div class="skeleton"><i></i><i></i><i></i></div>'; loadNba().then(() => { render(); nbaLive(); }).catch((err) => { console.error('NBA', err); view.innerHTML = '<div class="card empty">Impossible de charger la NBA.</div>'; }); }
+  else render();
+  window.scrollTo({ top: 0 });
+}
+function updateSportBar() {
+  document.querySelectorAll('#sportBar [data-sport]').forEach((b) => b.classList.toggle('active', b.dataset.sport === SPORT));
+  const upd = SPORT === 'nba' && NB ? new Date(NB.updatedAt) : M ? new Date(M.updatedAt) : null;
+  if (upd) $('#updated').textContent = `${SPORT === 'nba' ? 'NBA' : 'Pronos'} mis à jour ${fDayShort.format(upd)} à ${fTime.format(upd)}`;
+}
+
+// ---------- outils ----------
+const nightKeyNba = (d) => dayKey((typeof d === 'number' ? d : Date.parse(d)) - 10 * 3600e3); // un match à 2h du matin appartient à la soirée de la veille
+const nightLabel = (k) => { const a = noon(k), b = noon(addDays(k, 1)); return `Nuit du ${fWd.format(a).replace('.', '')} ${a.getUTCDate()} au ${fWd.format(b).replace('.', '')} ${b.getUTCDate()}`; };
+const nbaStars = (p) => (p >= 0.8 ? 5 : p >= 0.7 ? 4 : p >= 0.62 ? 3 : p >= 0.55 ? 2 : 1);
+const STATUS_FR = { Out: 'Absent', Doubtful: 'Douteux', Questionable: 'Incertain', 'Day-To-Day': 'Incertain', Probable: 'Probable' };
+const NBA_TYPES = { ML: 'Vainqueur', TOT: 'Total de points', PROP: 'Pari joueur' };
+function nbaTime(g) {
+  if (g.state === 'in') return `<span class="lv"><i class="dot-live"></i>${g.period ? 'QT' + g.period : ''} ${esc(g.clock || '')}</span>`;
+  if (g.completed) return `<b>Fin</b><small>${fShort.format(new Date(g.date))}</small>`;
+  return `<b>${fTime.format(new Date(g.date))}</b><small>${fWd.format(new Date(g.date)).replace('.', '')}</small>`;
+}
+const nbaVerdict = (g, type) => { const p = g.graded?.find((x) => x.type === type); return !p || p.win == null ? '' : p.win ? '<span class="tag win">✓ Gagné</span>' : '<span class="tag lose">✗ Perdu</span>'; };
+const absCountNba = (g) => [...g.injuries.h, ...g.injuries.a].filter((i) => i.status === 'Out' && i.ppg >= 8).length;
+function nbaCard(g) {
+  const p = g.pred, top = p.pH >= 0.5 ? 'h' : 'a', mp = g.picks[0], showScore = g.state !== 'pre' && g.hs != null;
+  const row = (s) => `<div class="mc-team ${g.completed && ((s === 'h' && g.hs < g.as) || (s === 'a' && g.as < g.hs)) ? 'lost' : ''}">${img(g[s].logo)}<span>${esc(g[s].short)} <small class="muted">${esc(g.rec?.[s]?.all || '')}</small></span>${showScore ? `<b class="sc">${g[s === 'h' ? 'hs' : 'as']}</b>` : ''}</div>`;
+  const b2b = [g.pred.rest.b2bH ? g.h.abbr : null, g.pred.rest.b2bA ? g.a.abbr : null].filter(Boolean);
+  const nAbs = absCountNba(g);
+  return `<article class="card mc" data-nba="${g.id}">
+    <div class="mc-main"><div class="mc-time">${nbaTime(g)}</div><div class="mc-teams">${row('h')}${row('a')}</div>
+      <div class="probs" style="grid-template-columns:repeat(2,48px)">${['h', 'a'].map((s) => `<div class="${s === top ? 'top' : ''}"><small>${esc(g[s].abbr)}</small><b>${pctN(s === 'h' ? p.pH : 1 - p.pH)}</b></div>`).join('')}</div></div>
+    <div class="mc-bar"><i class="h" style="width:${p.pH * 100}%"></i><i class="a" style="width:${(1 - p.pH) * 100}%"></i></div>
+    <div class="mc-foot"><span class="pick"><span class="pick-k">Prono</span> ${esc(mp.label)} <span class="odd">${odd(mp.odds)}${mp.est ? '≈' : ''}</span></span>${conf(nbaStars(mp.p))}
+      <span class="tag">Total ≈ ${Math.round(p.total)}</span>
+      ${b2b.length ? `<span class="tag big" title="2e match en 2 soirs">😴 ${b2b.join(', ')}</span>` : ''}${nAbs ? `<span class="tag lose" title="Joueurs importants absents">🚑 ${nAbs}</span>` : ''}${g.cup ? '<span class="tag brand">🏆 NBA Cup</span>' : ''}
+      ${nbaVerdict(g, 'ML')}</div>
+  </article>`;
+}
+
+// ---------- paris NBA à cote 1,20 – 1,80 : vainqueurs et joueurs d'abord ----------
+function nbaLegs(g) {
+  const legs = g.picks.map((p) => ({ id: `nba|${g.id}|${p.type}|${p.key}`, kind: p.type, label: p.label, p: p.p, odds: p.odds, est: p.est }));
+  for (const pp of g.props) legs.push({ id: `nba|${g.id}|PROP|${pp.pid}:${pp.stat}:${pp.line}`, kind: 'PROP', label: pp.label, p: pp.p, odds: pp.odds, est: true, head: pp.head });
+  return legs.map((l) => ({ ...l, g, match: `${g.a.abbr} @ ${g.h.abbr}`, date: g.date }));
+}
+function nbaSolidHtml(max = 10) {
+  const [, , lo, hi] = BANDS.find((b) => b[0] === solidBand) || BANDS[0];
+  const bonus = (l) => (l.kind === 'ML' ? 0.08 : l.kind === 'PROP' ? 0.06 : -0.06);
+  const all = NB.games.filter((g) => g.state === 'pre').flatMap((g) => nbaLegs(g).filter((l) => l.odds >= lo && l.odds <= hi && l.p >= 0.5).sort((a, b) => (b.p + bonus(b)) - (a.p + bonus(a))).slice(0, 2))
+    .sort((a, b) => b.p - a.p);
+  const n = {}; const CAP = { TOT: 2, ML: 5, PROP: 5 };
+  const list = all.filter((l) => { n[l.kind] = (n[l.kind] || 0) + 1; return n[l.kind] <= CAP[l.kind]; }).slice(0, max);
+  let html = '<h2>🎯 Paris NBA à cote 1,20 – 1,80 ' + info('solides') + '</h2><div class="segmented band-seg">' + BANDS.map((b) => '<button class="' + (b[0] === solidBand ? 'active' : '') + '" data-band="' + b[0] + '">' + b[1] + '</button>').join('') + '</div>';
+  if (!list.length) return html + '<div class="card empty">Aucun pari dans cette fourchette pour le moment. Les cotes NBA arrivent le jour du match.</div>';
+  return html + '<div class="card sure-list">' + list.map((l) => `<div class="mini solid" data-nba="${l.g.id}"><div class="t">${fTime.format(new Date(l.date))}<br><span class="small muted">${fWd.format(new Date(l.date)).replace('.', '')}</span></div>
+    <div style="min-width:0"><div class="small muted" style="display:flex;gap:6px;align-items:center">${img(l.g.a.logo, 'logo', 'width:14px;height:14px')}${esc(l.match)}${img(l.g.h.logo, 'logo', 'width:14px;height:14px')}</div><b>${esc(l.label)}</b>
+    <div class="solid-meta">${conf(nbaStars(l.p))}<span>10 € → <b>${(10 * l.odds).toFixed(2).replace('.', ',')} €</b></span><span class="muted">${NBA_TYPES[l.kind]}</span></div></div>
+    <div style="text-align:right"><b class="sure-p">${pctN(l.p)} %</b><div class="solid-odd">${odd(l.odds)}${l.est ? '≈' : ''}</div><button class="add" data-add="${esc(l.id)}" style="margin-top:6px">+</button></div></div>`).join('') + '</div>';
+}
+
+// ---------- combiné NBA du jour ----------
+function nbaComboHtml() {
+  const keys = Object.keys(NBC).sort(); if (!keys.length) return '';
+  const t = nightKeyNba(Date.now());
+  const c = NBC[t] || NBC[keys.find((k) => k > t)] || NBC[keys[keys.length - 1]];
+  const status = c.result ? (c.result.win ? '<span class="tag win">✓ Combiné gagné</span>' : '<span class="tag lose">✗ Combiné perdu</span>') : '<span class="small muted">Le plus probable pour une cote ≈ 2. Figé au 1er match de la nuit.</span>';
+  const legSt = (l) => l.win === true ? '<span class="tag win">✓</span>' : l.win === false ? '<span class="tag lose">✗</span>' : `<span class="o">${odd(l.odds)}${l.est ? '≈' : ''}</span>`;
+  const ids = c.legs.map((l) => `nba|${l.gid}|${l.type}|${l.type === 'PROP' ? `${l.pid}:${l.stat}:${l.line}` : l.key}`).join(',');
+  return `<div class="card combo daily"><div class="row-between"><div><div class="eyebrow">🏀 Combiné NBA · ${esc(nightLabel(c.night))} ${info('combine')}</div><div class="combo-total">${odd(c.odds)}</div></div>
+    <div class="ring" style="--p:${Math.round(c.p * 100)};background:conic-gradient(var(--accent) calc(var(--p)*1%),var(--surface-3) 0)"><span style="background:var(--surface);color:var(--text)">${pctN(c.p)}%</span></div></div>
+    <div class="combo-legs">${c.legs.map((l) => `<div class="leg" data-nba="${l.gid}"><div style="min-width:0"><small>${esc(l.match)} · ${fTime.format(new Date(l.date))}</small><b>${esc(l.label)}</b> <span class="small muted">${pct(l.p)}</span></div>${legSt(l)}</div>`).join('')}</div>
+    <div class="row-between">${status}${!c.result ? `<button class="btn-sm" data-addall="${esc(ids)}">+ Mon combiné</button>` : ''}</div></div>`;
+}
+
+// ---------- résumé de la nuit ----------
+function nightHtml() {
+  if (!NB.night?.length) return '';
+  const pickTag = (n) => { const p = n.picks?.find((x) => x.type === 'ML'); if (!p) return ''; const win = (p.key === 'h' && n.hs > n.as) || (p.key === 'a' && n.as > n.hs); return win ? '<span class="tag win">✓ prono</span>' : '<span class="tag lose">✗ prono</span>'; };
+  return `<h2>☀️ Résumé de la nuit</h2><div class="card night">${NB.night.map((n) => `<div class="night-row" data-nba="${n.id}">
+    <div class="nr-teams"><span class="${n.as > n.hs ? 'w' : ''}">${img(n.a.logo, 'logo', 'width:20px;height:20px')}${esc(n.a.abbr)} <b>${n.as}</b></span><span class="${n.hs > n.as ? 'w' : ''}">${img(n.h.logo, 'logo', 'width:20px;height:20px')}${esc(n.h.abbr)} <b>${n.hs}</b></span></div>
+    <div class="nr-top">${n.top ? `${img(n.top.head, 'logo', 'width:30px;height:30px;border-radius:50%;object-fit:cover;background:var(--surface-2)')}<div><b>${esc(n.top.name)}</b><small>${n.top.pts} pts · ${n.top.reb} reb · ${n.top.ast} pd</small></div>` : ''}</div>${pickTag(n)}</div>`).join('')}</div>`;
+}
+
+// ---------- onglets NBA ----------
+function renderNbaMatchs() {
+  const nights = [...new Set(NB.games.map((g) => nightKeyNba(g.date)))].sort();
+  let html = nightHtml() + nbaComboHtml() + nbaSolidHtml(10);
+  for (const k of nights) {
+    const gs = NB.games.filter((g) => nightKeyNba(g.date) === k).sort((a, b) => a.date.localeCompare(b.date));
+    html += `<div class="day-head">🏀 ${esc(nightLabel(k))} <span class="small muted">${gs.length} matchs · heure de Paris</span></div><div class="mlist">${gs.map(nbaCard).join('')}</div>`;
+  }
+  view.innerHTML = html || '<div class="card empty">Pas de match NBA dans les 48 prochaines heures.</div>';
+}
+function renderNbaSemaine() { renderNbaMatchs(); }
+function renderNbaCombis() {
+  const props = NB.games.filter((g) => g.state === 'pre').flatMap((g) => g.props.map((p) => ({ ...p, g }))).filter((p) => p.p >= 0.6 && !p.injured).sort((a, b) => b.p - a.p).slice(0, 20);
+  view.innerHTML = `<h2>🏀 Combinés NBA</h2>${nbaComboHtml()}${nbaSolidHtml(12)}
+    <h2>⛹️ Paris joueurs de la nuit</h2><p class="note">Calculés avec les moyennes du joueur (saison + 10 derniers matchs), la défense adverse et les absents. Cotes ≈ estimées : ESPN ne donne pas les cotes joueurs.</p>
+    <div class="card" style="overflow:hidden">${props.map((p) => `<div class="player" data-nba="${p.g.id}" style="grid-template-columns:auto minmax(0,1fr) auto auto">${img(p.head, 'logo', 'width:34px;height:34px;border-radius:50%;object-fit:cover;background:var(--surface-2)')}<div class="pn"><b>${esc(p.label)}</b><small>${esc(p.g.a.abbr)} @ ${esc(p.g.h.abbr)} · projection ${String(p.proj).replace('.', ',')}</small></div><span class="v">${pct(p.p)}</span><button class="add" data-add="${esc(`nba|${p.g.id}|PROP|${p.pid}:${p.stat}:${p.line}`)}">+</button></div>`).join('') || '<div class="empty">Pas encore de paris joueurs.</div>'}</div>
+    <p class="note">Ton combiné (foot + NBA) se trouve dans ⚽ Foot → Combinés → Mon combiné.</p>`;
+}
+function renderNbaJoueurs() {
+  const L = NB.leaders, team = (id) => NB.teams[id] || {};
+  const seg = (k, l) => `<button class="${state.pSort === k ? 'active' : ''}" data-sort="${k}">${l}</button>`;
+  const k = ['pts', 'reb', 'ast'].includes(state.pSort) ? state.pSort : 'pts';
+  view.innerHTML = `<h2>⛹️ Meilleurs joueurs NBA</h2><div class="filters"><div class="segmented">${seg('pts', 'Points')}${seg('reb', 'Rebonds')}${seg('ast', 'Passes')}</div></div>
+    <div class="card" style="overflow:hidden">${(L[k] || []).map((p, i) => `<div class="rank-row"><span class="pos">${i + 1}</span><div class="who" style="display:flex;gap:10px;align-items:center">${img(p.head, 'logo', 'width:36px;height:36px;border-radius:50%;object-fit:cover;background:var(--surface-2)')}<div style="min-width:0"><b>${esc(p.name)}</b><small>${img(team(p.team).logo, '')}${esc(team(p.team).short || '')} · ${p.gp} matchs</small></div></div><span></span><span class="big">${String(p.v).replace('.', ',')}</span></div>`).join('')}</div>
+    <p class="note">Moyennes par match sur la saison (joueurs ayant joué au moins 60 % des matchs de leur équipe).</p>`;
+  view.querySelectorAll('[data-sort]').forEach((b) => b.onclick = () => { state.pSort = b.dataset.sort; render(); });
+}
+function renderNbaClassements() {
+  const seg = (k, l) => `<button class="${nbaStand === k ? 'active' : ''}" data-nbst="${k}">${l}</button>`;
+  let body = '';
+  if (nbaStand === 'est' || nbaStand === 'ouest') {
+    const conf = NB.standings.find((s) => (nbaStand === 'est' ? /Est/ : /Ouest/).test(s.name));
+    body = conf ? `<div class="card table-wrap"><table><thead><tr><th class="zone"></th><th>#</th><th class="l">Équipe</th><th>V-D</th><th>%</th><th>Écart</th><th>Série</th><th>10 der.</th><th>Dom.</th><th>Ext.</th></tr></thead><tbody>
+      ${conf.rows.map((r) => `<tr><td class="zone" style="background:${r.seed <= 6 ? 'var(--win)' : r.seed <= 10 ? 'var(--gold)' : 'transparent'}"></td><td><span class="pos">${r.seed}</span></td><td class="l"><div class="team">${img(r.logo)}<span>${esc(r.short)}</span></div></td><td><b>${r.w}-${r.l}</b></td><td>${esc(r.pct)}</td><td>${esc(r.gb)}</td><td>${esc(r.streak)}</td><td>${esc(r.l10)}</td><td>${esc(r.home)}</td><td>${esc(r.road)}</td></tr>`).join('')}</tbody></table></div>
+      <div class="note"><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--win)"></span> Playoffs directs (1 à 6) · <span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--gold)"></span> Play-in (7 à 10)</div>` : '';
+  } else if (nbaStand === 'cup') {
+    const cup = NB.cup.slice().sort((a, b) => b.date.localeCompare(a.date));
+    body = cup.length ? `<p class="note">La NBA Cup se joue pendant la saison : phase de groupes en novembre, puis quarts, demies et finale en décembre.</p><div class="card" style="overflow:hidden">${cup.map((g) => `<div class="mini" data-nba="${g.id}"><div class="t">${g.completed ? 'Fin' : fTime.format(new Date(g.date))}<br><span class="small muted">${fShort.format(new Date(g.date))}</span></div><div class="n">${img(g.a.logo)}${esc(g.a.abbr)} ${g.completed ? `<b>${g.as}</b>` : ''} <span class="muted">@</span> ${img(g.h.logo)}${esc(g.h.abbr)} ${g.completed ? `<b>${g.hs}</b>` : ''}</div><span class="tag">${esc((g.note || '').replace('NBA Cup - ', '').replace('Group Play', 'Groupes').replace('Quarterfinal', 'Quart').replace('Semifinal', 'Demi').replace('Championship', 'Finale'))}</span></div>`).join('')}</div>` : '<div class="card empty">Pas de match de NBA Cup cette saison pour le moment.</div>';
+  } else if (nbaStand === 'po') {
+    const bySeries = new Map();
+    for (const g of NB.playoffs || []) { const k = [g.h.id, g.a.id].sort().join('-'); if (!bySeries.has(k)) bySeries.set(k, []); bySeries.get(k).push(g); }
+    body = bySeries.size ? [...bySeries.values()].map((gs) => { const l = gs[gs.length - 1]; return `<div class="card pad section"><div class="row-between"><b style="display:flex;gap:8px;align-items:center">${img(l.h.logo)}${esc(l.h.short)} – ${esc(l.a.short)}${img(l.a.logo)}</b><span class="tag brand">${esc(l.series?.summary || '')}</span></div><div class="small muted" style="margin-top:6px">${gs.map((g) => g.completed ? `${g.a.abbr} ${g.as}-${g.hs} ${g.h.abbr}` : fDayShort.format(new Date(g.date))).join(' · ')}</div></div>`; }).join('') : '<div class="card empty">🏆 Les playoffs commencent mi-avril. Le tableau des séries s\'affichera ici.</div>';
+  }
+  view.innerHTML = `<h2>🏆 Classements NBA</h2><div class="filters"><div class="segmented" style="flex-wrap:wrap">${seg('est', 'Est')}${seg('ouest', 'Ouest')}${seg('cup', 'NBA Cup')}${seg('po', 'Playoffs')}</div></div>${body}`;
+  view.querySelectorAll('[data-nbst]').forEach((b) => b.onclick = () => { nbaStand = b.dataset.nbst; render(); });
+}
+function renderNbaPerf() {
+  const done = Object.values(NBH).filter((h) => h.result);
+  const picks = done.flatMap((h) => h.picks.filter((p) => p.win != null));
+  const agg = (arr) => ({ n: arr.length, w: arr.filter((p) => p.win).length });
+  const ml = agg(picks.filter((p) => p.type === 'ML')), tot = agg(picks.filter((p) => p.type === 'TOT'));
+  const cb = Object.values(NBC).filter((c) => c.result), cbw = cb.filter((c) => c.result.win).length;
+  const kpi = (v, l, r) => `<div class="card kpi">${r != null ? `<div class="ring" style="--p:${pctN(r)}"><span>${pctN(r)}%</span></div>` : ''}<div><div class="v">${v}</div><div class="l">${l}</div></div></div>`;
+  const cal = NBP?.calibration ? Object.entries(NBP.calibration).sort().map(([k, c]) => `<tr><td class="l">${k} %</td><td>${pct(c.announced)}</td><td><b>${pct(c.real)}</b></td><td>${c.n}</td></tr>`).join('') : '';
+  view.innerHTML = `<h2>📈 Performance NBA</h2><div class="kpis">
+      ${kpi(`${ml.w}/${ml.n}`, 'Vainqueurs trouvés', ml.n ? ml.w / ml.n : null)}${kpi(`${tot.w}/${tot.n}`, 'Total de points', tot.n ? tot.w / tot.n : null)}${kpi(`${cbw}/${cb.length}`, 'Combinés NBA du jour passés', cb.length ? cbw / cb.length : null)}</div>
+    ${!picks.length ? '<p class="note">Le suivi NBA démarre : les pronos sont enregistrés avant chaque match et corrigés le matin.</p>' : ''}
+    ${cal ? `<h3>Test sur les saisons passées (${NBP.after?.n || ''} matchs)</h3><div class="card table-wrap"><table><thead><tr><th class="l">Chances annoncées</th><th>Moyenne annoncée</th><th>Réellement passé</th><th>Matchs</th></tr></thead><tbody>${cal}</tbody></table></div>
+    <p class="note">Sur 2 saisons, le modèle trouve le bon vainqueur ${NBP.after?.acc ?? '?'} % du temps, et ses pourcentages sont fiables : « 75 % » passe environ 3 fois sur 4. Réglé automatiquement chaque lundi.</p>` : ''}`;
+}
+
+// ---------- fiche d'un match NBA ----------
+function openNbaGame(id) {
+  const g0 = NB.games.find((x) => x.id === id) || null;
+  let sub = g0 && g0.state !== 'pre' ? 'live' : 'pronos';
+  modalId = 'nba:' + id;
+  const body = $('#modalBody');
+  modalDraw = () => {
+    const g = NB.games.find((x) => x.id === id);
+    if (!g) { body.innerHTML = '<div class="fiche-body"><div class="card empty">Match introuvable.</div></div>'; if (!g0) fetchNbaLive({ id }).then(() => {}); return; }
+    const tabs = [...(g.state !== 'pre' ? [['live', g.state === 'in' ? '● Direct' : 'Feuille de match']] : []), ['pronos', 'Pronos'], ['joueurs', 'Joueurs'], ['infos', 'Blessés & forme']];
+    const mid = g.state === 'pre' ? `<b>${fTime.format(new Date(g.date))}</b><small>${fDayShort.format(new Date(g.date))}</small>` : `<b>${g.hs} - ${g.as}</b><small>${g.state === 'in' ? `<i class="dot-live"></i> QT${g.period} ${esc(g.clock || '')}` : esc(g.detail || 'Terminé')}</small>`;
+    body.innerHTML = `<div class="fiche-head nba-head"><div class="comp">🏀 NBA${g.cup ? ' · NBA Cup' : ''} · ${fDay.format(new Date(g.date))}</div><div class="head-fav"></div>
+      <div class="fiche-teams"><div class="t"><span class="crest">${img(g.h.logo, '')}</span>${esc(g.h.short)}<small style="opacity:.85">${esc(g.rec?.h?.all || '')} · dom. ${esc(g.rec?.h?.home || '')}</small></div><div class="mid">${mid}</div><div class="t"><span class="crest">${img(g.a.logo, '')}</span>${esc(g.a.short)}<small style="opacity:.85">${esc(g.rec?.a?.all || '')} · ext. ${esc(g.rec?.a?.road || '')}</small></div></div></div>
+      <div class="fiche-body"><div class="subtabs">${tabs.map(([k, l]) => `<button data-sub="${k}" class="${k === sub ? 'active' : ''}">${l}</button>`).join('')}</div>
+      <div>${({ live: nbaFicheLive, pronos: nbaFichePronos, joueurs: nbaFicheJoueurs, infos: nbaFicheInfos })[sub](g)}</div></div>`;
+    body.querySelectorAll('[data-sub]').forEach((b) => b.onclick = () => { sub = b.dataset.sub; modalDraw(); });
+    if (sub === 'live') fetchNbaLive(g);
+  };
+  modalDraw();
+  const modal = $('#modal'); modal.hidden = false; document.body.style.overflow = 'hidden';
+  $('.sheet').scrollTop = 0; $('.sheet').style.transform = '';
+  try { history.pushState({ fiche: id }, ''); } catch (e) {}
+}
+function nbaFichePronos(g) {
+  const p = g.pred, add = (id) => (g.state === 'pre' ? `<button class="add" data-add="${esc(id)}">+</button>` : '');
+  const pickLine = (x) => `<div class="pick-card"><div><div class="k">${NBA_TYPES[x.type]}</div><b>${esc(x.label)}</b></div><div style="display:flex;align-items:center;gap:10px"><div style="text-align:right">${conf(nbaStars(x.p))}<div class="small" style="margin-top:3px"><b>${pct(x.p)}</b> · ${odd(x.odds)}${x.est ? '≈' : ''}</div>${nbaVerdict(g, x.type)}</div>${add(`nba|${g.id}|${x.type}|${x.key}`)}</div></div>`;
+  return `<div class="card pad section why"><div class="eyebrow">💬 Pourquoi ce prono ${info('modele')}</div><p>${esc(g.why)}</p></div>
+    <div class="card pad section"><div class="eyebrow">Nos pronos</div>${g.picks.map(pickLine).join('')}</div>
+    <div class="card pad section"><h3 style="margin-top:0">Vainqueur (prolongation incluse)</h3><div class="mk">${mkRow(esc(g.h.short), p.pH, g.oddsFr?.ml?.[0], '', 'var(--home)')}${mkRow(esc(g.a.short), 1 - p.pH, g.oddsFr?.ml?.[1], '', 'var(--away)')}</div>
+      <p class="note">Écart prévu : ${esc(p.margin >= 0 ? g.h.short : g.a.short)} de ${Math.abs(p.margin).toFixed(1).replace('.', ',')} points · calcul : ${esc(p.src)}${p.espn ? ` · prédiction ESPN : ${pct(p.espn.h)} / ${pct(p.espn.a)}` : ''}</p>
+      <h3>Total de points</h3><div class="mk">${mkRow(`Plus de ${String(p.tLine).replace('.', ',')}`, p.pOver, g.oddsFr?.total?.[0])}${mkRow(`Moins de ${String(p.tLine).replace('.', ',')}`, 1 - p.pOver, g.oddsFr?.total?.[1], '', 'var(--draw)')}</div>
+      <p class="note">Total attendu ≈ ${Math.round(p.total)} points${g.odds?.total ? ` · ligne du bookmaker ${String(g.odds.total.line).replace('.', ',')}` : ''}. Cotes : estimation France${g.odds?.src ? ` d'après ${esc(g.odds.src)}` : ' (pas encore de cotes : elles arrivent le jour du match)'}.</p></div>`;
+}
+function nbaFicheJoueurs(g) {
+  const side = (s) => { const list = g.props.filter((p) => p.team === s); return `<div class="card section" style="overflow:hidden"><div class="list-head">${img(g[s].logo, '')}${esc(g[s].short)}</div>${list.length ? list.map((p) => `<div class="player" style="grid-template-columns:auto minmax(0,1fr) auto auto">${img(p.head, 'logo', 'width:32px;height:32px;border-radius:50%;object-fit:cover;background:var(--surface-2)')}<div class="pn"><b>${esc(p.label.replace(p.name + ' : ', ''))}</b><small>${esc(p.name)} · projection ${String(p.proj).replace('.', ',')}${p.injured ? ' · ⚠️ ' + esc(STATUS_FR[p.injured] || p.injured) : ''}</small></div><span class="v">${pct(p.p)}<small class="muted" style="display:block;font-weight:600">${odd(p.odds)}≈</small></span>${g.state === 'pre' ? `<button class="add" data-add="${esc(`nba|${g.id}|PROP|${p.pid}:${p.stat}:${p.line}`)}">+</button>` : '<span></span>'}</div>`).join('') : '<div class="empty">Pas de paris joueurs.</div>'}</div>`; };
+  return side('h') + side('a') + '<p class="note">Projection = 55 % des 10 derniers matchs + 45 % de la saison, ajustée à la défense adverse et aux coéquipiers absents. Cotes ≈ estimées.</p>';
+}
+function nbaFicheInfos(g) {
+  const r = g.pred.rest;
+  const restTxt = (s) => { const d = r[s], b2b = r[s === 'h' ? 'b2bH' : 'b2bA']; return b2b ? '<span class="tag big">😴 2e match en 2 soirs</span>' : `<span class="tag">${d >= 3 ? '3 jours ou plus' : d + ' jour' + (d > 1 ? 's' : '')} de repos</span>`; };
+  const inj = (s) => g.injuries[s].length ? g.injuries[s].map((i) => `<div class="abs-row"><span class="tag ${i.status === 'Out' ? 'lose' : 'big'}">${esc(STATUS_FR[i.status] || i.status)}</span><div><b>${esc(i.name)}</b><div class="small muted">${i.ppg ? String(i.ppg).replace('.', ',') + ' pts/match' : ''}${i.info ? ' · ' + esc(i.info) : ''}</div></div></div>`).join('') : '<div class="small muted">Aucun blessé signalé.</div>';
+  const form = (s) => `<div class="form">${(g.form[s] || []).slice(0, 10).map((x) => `<b class="${x.w ? 'W' : 'L'}" title="${x.home ? 'vs' : '@'} ${esc(x.opp)} ${esc(x.s)}">${x.w ? 'V' : 'D'}</b>`).join('')}</div>`;
+  return `<div class="card pad section"><h3 style="margin-top:0">😴 Repos ${info('repos')}</h3>
+      <div class="row-between" style="margin:6px 0"><span style="display:flex;gap:8px;align-items:center;font-weight:600">${img(g.h.logo, 'logo', 'width:20px;height:20px')}${esc(g.h.short)}</span>${restTxt('h')}</div>
+      <div class="row-between" style="margin:6px 0"><span style="display:flex;gap:8px;align-items:center;font-weight:600">${img(g.a.logo, 'logo', 'width:20px;height:20px')}${esc(g.a.short)}</span>${restTxt('a')}</div></div>
+    <div class="card pad section"><h3 style="margin-top:0">🚑 Blessés (officiel)</h3><div style="margin:8px 0 4px"><b>${esc(g.h.short)}</b></div>${inj('h')}<div style="margin:12px 0 4px"><b>${esc(g.a.short)}</b></div>${inj('a')}</div>
+    <div class="card pad section"><h3 style="margin-top:0">Forme (10 derniers matchs)</h3>
+      <div class="row-between" style="margin:8px 0"><span style="font-weight:600">${esc(g.h.short)}</span>${form('h')}</div><div class="row-between" style="margin:8px 0"><span style="font-weight:600">${esc(g.a.short)}</span>${form('a')}</div></div>
+    <div class="card section table-wrap"><table><thead><tr><th class="l">Bilan</th><th>${esc(g.h.abbr)}</th><th>${esc(g.a.abbr)}</th></tr></thead><tbody>
+      <tr><td class="l">Saison</td><td>${esc(g.rec?.h?.all || '–')}</td><td>${esc(g.rec?.a?.all || '–')}</td></tr>
+      <tr><td class="l">À domicile</td><td>${esc(g.rec?.h?.home || '–')}</td><td>${esc(g.rec?.a?.home || '–')}</td></tr>
+      <tr><td class="l">À l'extérieur</td><td>${esc(g.rec?.h?.road || '–')}</td><td>${esc(g.rec?.a?.road || '–')}</td></tr>
+      <tr><td class="l">Force (Elo)</td><td><b>${g.pred.elo[0]}</b></td><td><b>${g.pred.elo[1]}</b></td></tr></tbody></table></div>
+    <div class="card pad section"><h3 style="margin-top:0">Confrontations cette saison</h3>${g.h2h.length ? g.h2h.map((x) => `<div class="row-between" style="padding:5px 0"><span class="small muted">${fShort.format(new Date(x.d))}</span><span>${esc(x.a)} <b>${x.as}-${x.hs}</b> ${esc(x.h)}</span></div>`).join('') : '<span class="small muted">Pas encore de confrontation.</span>'}</div>`;
+}
+// Feuille de match en direct (quart-temps, joueurs, stats d'équipe)
+async function fetchNbaLive(g) {
+  if (g._busy || (g._live && Date.now() - g._live.ts < 25e3)) return;
+  g._busy = true;
+  try {
+    const s = await fetch(`${NBA_API}/summary?event=${g.id}`).then((r) => r.json());
+    const comp = s.header?.competitions?.[0];
+    const q = {}; for (const c of comp?.competitors || []) q[c.homeAway === 'home' ? 'h' : 'a'] = (c.linescores || []).map((x) => x.displayValue ?? x.value);
+    const teams = {}; for (const tp of s.boxscore?.players || []) { const side = tp.team.id === g.h.id ? 'h' : 'a'; const st = tp.statistics?.[0]; if (!st) continue; const ix = (n) => st.names.indexOf(n); teams[side] = (st.athletes || []).filter((a) => !a.didNotPlay && a.stats?.length).map((a) => ({ name: a.athlete.shortName || a.athlete.displayName, head: a.athlete.headshot?.href, starter: a.starter, min: a.stats[ix('MIN')], pts: +a.stats[ix('PTS')], reb: +a.stats[ix('REB')], ast: +a.stats[ix('AST')], fg: a.stats[ix('FG')], tp: a.stats[ix('3PT')] })).sort((x, y) => y.pts - x.pts); }
+    const ts = {}; for (const t of s.boxscore?.teams || []) { const side = t.team.id === g.h.id ? 'h' : 'a'; ts[side] = Object.fromEntries((t.statistics || []).map((x) => [x.name, x.displayValue])); }
+    g._live = { ts: Date.now(), q, teams, stats: ts };
+  } catch (e) { g._live = g._live || { ts: Date.now(), q: {}, teams: {}, stats: {} }; }
+  g._busy = false;
+  if (modalId === 'nba:' + g.id && modalDraw) { const sh = $('.sheet'), top = sh.scrollTop; modalDraw(); sh.scrollTop = top; }
+}
+function nbaFicheLive(g) {
+  const L = g._live; if (!L) return '<div class="card pad empty"><div class="spinner"></div>Chargement de la feuille de match…</div>';
+  const nQ = Math.max(L.q.h?.length || 0, L.q.a?.length || 0, 4);
+  const qh = Array.from({ length: nQ }, (_, i) => i < 4 ? 'QT' + (i + 1) : 'Prol.' + (i - 3));
+  const statRow = (k, label) => { const a = parseFloat(L.stats.h?.[k]), b = parseFloat(L.stats.a?.[k]); if (isNaN(a) && isNaN(b)) return ''; const tot = (a || 0) + (b || 0) || 1; return `<div class="st-row"><div class="st-v ${a > b ? 'lead' : ''}">${esc(L.stats.h?.[k] ?? '–')}</div><div class="st-mid"><div class="st-lab">${label}</div><div class="st-bar"><i style="width:${(a / tot) * 100}%"></i><i style="width:${(b / tot) * 100}%"></i></div></div><div class="st-v ${b > a ? 'lead' : ''}">${esc(L.stats.a?.[k] ?? '–')}</div></div>`; };
+  const players = (s) => `<div class="card section" style="overflow:hidden"><div class="list-head">${img(g[s].logo, '')}${esc(g[s].short)}</div><div class="player headrow" style="grid-template-columns:minmax(0,1fr) repeat(4,auto)"><span>Joueur</span><span>MIN</span><span>PTS</span><span>REB</span><span>PD</span></div>
+    ${(L.teams[s] || []).slice(0, 10).map((p) => `<div class="player" style="grid-template-columns:minmax(0,1fr) repeat(4,auto)"><div class="pn"><b>${esc(p.name)}</b>${p.starter ? '' : ' <small style="display:inline" class="muted">(remp.)</small>'}<small>Tirs ${esc(p.fg || '')} · 3 pts ${esc(p.tp || '')}</small></div><span class="o">${esc(p.min || '')}</span><span class="v">${p.pts}</span><span class="o">${p.reb}</span><span class="o">${p.ast}</span></div>`).join('') || '<div class="empty">Pas encore de stats.</div>'}</div>`;
+  return `${g.state === 'in' ? '<p class="note"><i class="dot-live"></i> Mis à jour automatiquement toutes les 30 secondes.</p>' : ''}
+    <div class="card section table-wrap"><table><thead><tr><th class="l">Équipe</th>${qh.map((x) => `<th>${x}</th>`).join('')}<th>Total</th></tr></thead><tbody>
+      ${['h', 'a'].map((s) => `<tr><td class="l"><div class="team">${img(g[s].logo)}<span>${esc(g[s].abbr)}</span></div></td>${Array.from({ length: nQ }, (_, i) => `<td>${esc(L.q[s]?.[i] ?? '')}</td>`).join('')}<td><b>${s === 'h' ? g.hs ?? '' : g.as ?? ''}</b></td></tr>`).join('')}</tbody></table></div>
+    <div class="card pad section"><h3 style="margin-top:0">Stats d'équipe</h3>${statRow('fieldGoalPct', 'Tirs réussis %')}${statRow('threePointFieldGoalPct', '3 points %')}${statRow('totalRebounds', 'Rebonds')}${statRow('assists', 'Passes décisives')}${statRow('turnovers', 'Balles perdues')}${statRow('steals', 'Interceptions')}</div>
+    ${players('h')}${players('a')}`;
+}
+
+// ---------- scores NBA en direct (toutes les 30 s quand des matchs sont en cours ou proches) ----------
+let nbaTimer = null;
+const etDay = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date(d)).replace(/-/g, '');
+async function nbaLive() {
+  clearTimeout(nbaTimer);
+  if (!NB || document.hidden) { nbaTimer = setTimeout(nbaLive, 60e3); return; }
+  const now = Date.now();
+  const cands = NB.games.filter((g) => g.state === 'in' || (!g.completed && Date.parse(g.date) - now < 15 * 60e3 && now - Date.parse(g.date) < 4 * 3600e3));
+  if (cands.length) {
+    let changed = false;
+    for (const d of new Set(cands.map((g) => etDay(g.date)))) {
+      const j = await fetch(`${NBA_API}/scoreboard?dates=${d}`).then((r) => r.json()).catch(() => null);
+      for (const e of j?.events || []) {
+        const g = NB.games.find((x) => x.id === e.id); if (!g) continue;
+        const c = e.competitions?.[0], h = c?.competitors?.find((x) => x.homeAway === 'home'), a = c?.competitors?.find((x) => x.homeAway === 'away'), st = e.status?.type || {};
+        const upd = { state: st.state, completed: !!st.completed, detail: st.shortDetail, period: e.status?.period, clock: e.status?.displayClock, hs: h?.score != null ? +h.score : g.hs, as: a?.score != null ? +a.score : g.as };
+        if (JSON.stringify(upd) !== JSON.stringify({ state: g.state, completed: g.completed, detail: g.detail, period: g.period, clock: g.clock, hs: g.hs, as: g.as })) { Object.assign(g, upd); changed = true; }
+      }
+    }
+    if (changed && SPORT === 'nba') {
+      if (modalDraw && String(modalId).startsWith('nba:')) { const g = NB.games.find((x) => 'nba:' + x.id === modalId); if (g) { g._live = null; fetchNbaLive(g); } }
+      if (!document.activeElement || !/INPUT|SELECT/.test(document.activeElement.tagName)) { if (['matchs', 'semaine'].includes(state.tab)) render(); }
+    }
+  }
+  nbaTimer = setTimeout(nbaLive, cands.length ? 30e3 : 5 * 60e3);
+}
+
+function renderNba() {
+  if (!NB) { view.innerHTML = '<div class="skeleton"><i></i><i></i><i></i></div>'; return; }
+  ({ matchs: renderNbaMatchs, semaine: renderNbaSemaine, combis: renderNbaCombis, joueurs: renderNbaJoueurs, classements: renderNbaClassements, perf: renderNbaPerf })[state.tab]();
+}
+
 // ---------- navigation ----------
 function render() {
   updatePill();
   if (!M) return;
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === state.tab));
+  if (SPORT === 'nba') { renderNba(); updateMyCount(); return; }
   ({ matchs: renderMatchs, semaine: renderSemaine, combis: renderCombis, joueurs: renderJoueurs, classements: renderClassements, perf: renderPerf })[state.tab]();
   updateMyCount();
 }
+document.addEventListener('click', (e) => { const b = e.target.closest('[data-sport]'); if (b) setSport(b.dataset.sport); });
 $('#tabs').onclick = (e) => { const b = e.target.closest('button'); if (!b) return; state.tab = b.dataset.tab; render(); window.scrollTo({ top: 0 }); };
 view.addEventListener('click', (e) => {
+  const nb = e.target.closest('[data-nba]');
+  if (nb && !e.target.closest('button')) { openNbaGame(nb.dataset.nba); return; }
   const band = e.target.closest('[data-band]');
   if (band) { solidBand = band.dataset.band; render(); return; }
   const fv = e.target.closest('[data-fav]');
@@ -1139,6 +1431,7 @@ const GLOSSARY = {
   modele: ['Comment le site calcule', "Le site mélange les cotes des bookmakers (90 %) et notre modèle (10 %) : force des équipes (Elo), buts, tirs cadrés, forme. Il se règle tout seul chaque lundi."],
   forme: ['Forme V / N / D', "Les 5 derniers matchs de l'équipe : V = victoire, N = nul, D = défaite. Le plus récent est à gauche."],
   elo: ['Note de force (Elo)', "Un score de niveau mis à jour après chaque match : on gagne des points en battant des équipes fortes. 1500 = moyen, 1900+ = très fort."],
+  repos: ['Repos et back-to-back', "En NBA, une équipe qui joue son 2e match en 2 soirs (back-to-back) est un peu moins forte. Sur 2 saisons, elle a gagné 46 % de ces matchs au lieu de 50 %. Le site compare aussi les jours de repos des deux équipes."],
   favoris: ['Favoris', "Touche ☆ sur un match pour le suivre : il apparaît en haut de l'onglet Matchs. Les favoris restent sur ton téléphone."],
 };
 const info = (key) => '<button class="info" data-info="' + key + '" aria-label="Explication">?</button>';
@@ -1195,7 +1488,7 @@ function startTour(i = 0) {
 // Bulle flottante « Mon combiné » (accès rapide depuis tous les onglets)
 function updatePill() {
   let p = $('#myPill');
-  if (!p) { p = document.createElement('button'); p.id = 'myPill'; p.className = 'my-pill'; document.body.appendChild(p); p.onclick = () => { buzz(); state.tab = 'combis'; render(); setTimeout(() => { const h = [...document.querySelectorAll('h2')].find((x) => /Mon combiné/.test(x.textContent)); h?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 60); }; }
+  if (!p) { p = document.createElement('button'); p.id = 'myPill'; p.className = 'my-pill'; document.body.appendChild(p); p.onclick = () => { buzz(); if (SPORT === 'nba') setSport('foot'); state.tab = 'combis'; render(); setTimeout(() => { const h = [...document.querySelectorAll('h2')].find((x) => /Mon combiné/.test(x.textContent)); h?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 60); }; }
   if (!my.length || state.tab === 'combis' || !M) { p.hidden = true; return; }
   const total = my.reduce((t, x) => t * (Number(x.odds) || 1), 1);
   p.hidden = false; p.innerHTML = '🧾 <b>' + my.length + '</b> pari' + (my.length > 1 ? 's' : '') + ' · cote <b>' + odd(total) + '</b>';

@@ -490,3 +490,26 @@ button:active { transform: scale(.97); }
 .solid-odd { display: inline-block; margin-top: 4px; padding: 3px 9px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); font-weight: 800; font-size: 14px; }
 .band-seg { margin: 0 0 10px; display: flex; width: 100%; }
 .band-seg button { flex: 1; padding: 7px 4px; font-size: 12px; }
+
+/* ===== NBA ===== */
+.sport-bar { max-width: 1040px; margin: 10px auto 0; padding: 0 16px; display: flex; gap: 6px; }
+.sport-bar button { flex: 1; border: 1px solid var(--line); background: var(--surface); border-radius: 14px; padding: 10px; font-weight: 800; font-size: 14px; color: var(--muted); transition: all .18s; }
+.sport-bar button.active { color: #fff; border-color: transparent; background: var(--grad); box-shadow: 0 8px 20px -10px rgba(16, 185, 129, .7); }
+body[data-sport="nba"] .sport-bar button.active { background: linear-gradient(135deg, #f97316 0%, #dc2626 100%); box-shadow: 0 8px 20px -10px rgba(249, 115, 22, .7); }
+body[data-sport="nba"] .tabs button.active svg { color: #f97316; }
+@media (max-width: 760px) { body[data-sport="nba"] .tabs button.active { color: #f97316; } }
+.nba-head { background: linear-gradient(135deg, #f97316 0%, #b91c1c 100%); }
+.fiche-teams .t small { font-size: 11px; font-weight: 600; }
+.night { overflow: hidden; }
+.night-row { display: grid; grid-template-columns: 92px 1fr auto; gap: 10px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.night-row:last-child { border-bottom: 0; }
+.nr-teams { display: grid; gap: 4px; font-size: 13.5px; }
+.nr-teams span { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.nr-teams span.w { color: var(--text); font-weight: 800; }
+.nr-teams b { margin-left: auto; }
+.nr-top { display: flex; gap: 8px; align-items: center; min-width: 0; font-size: 13px; }
+.nr-top small { display: block; color: var(--muted); font-size: 11.5px; }
+.nr-top b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini.solid > div:last-child { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.mini.solid .sure-p { display: block; }
+.mini.solid .add { margin-top: 2px !important; width: 30px; height: 30px; font-size: 18px; }

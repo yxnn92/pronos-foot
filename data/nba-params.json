@@ -1,0 +1,54 @@
+{
+  "updatedAt": "2026-11-27T10:30:41.247Z",
+  "adopted": false,
+  "params": {
+    "K": 30,
+    "HA": 50,
+    "ELO_PT": 28,
+    "eloW": 0.85,
+    "b2b": 1,
+    "restPt": 0.3,
+    "sigma": 10.5,
+    "sigmaT": 19,
+    "regress": 0.35,
+    "formHalf": 15
+  },
+  "before": {
+    "n": 2439,
+    "ll": 0.6038,
+    "acc": 66.9,
+    "maeTotal": 15.5,
+    "llT": 4.409,
+    "b2b": "592 matchs avec 1 seule équipe en back-to-back : elle perd 46 %"
+  },
+  "after": {
+    "n": 2439,
+    "ll": 0.6038,
+    "acc": 66.9,
+    "maeTotal": 15.5,
+    "llT": 4.409,
+    "b2b": "592 matchs avec 1 seule équipe en back-to-back : elle perd 46 %"
+  },
+  "calibration": {
+    "50-60": {
+      "n": 810,
+      "announced": 0.551,
+      "real": 0.553
+    },
+    "70-80": {
+      "n": 518,
+      "announced": 0.748,
+      "real": 0.743
+    },
+    "60-70": {
+      "n": 734,
+      "announced": 0.649,
+      "real": 0.638
+    },
+    "80+": {
+      "n": 377,
+      "announced": 0.858,
+      "real": 0.878
+    }
+  }
+}
