@@ -117,6 +117,7 @@ let favs = new Set();
 try { favs = new Set(JSON.parse(localStorage.getItem('favoris') || '[]')); } catch (e) {}
 const isFav = (id) => favs.has(id);
 function toggleFav(id) {
+  buzz(15);
   if (favs.has(id)) { favs.delete(id); toast('Retiré des favoris'); } else { favs.add(id); toast('⭐ Ajouté aux favoris'); }
   // on oublie les favoris des matchs qui ne sont plus affichés
   const ids = new Set(M.matches.map((m) => m.id)); favs = new Set([...favs].filter((x) => ids.has(x)));
@@ -143,11 +144,11 @@ function matchCard(m) {
         <div class="mc-team ${lost('h') ? 'lost' : ''}">${img(m.h.logo)}<span>${esc(m.h.short)}</span>${showScore ? `<b class="sc">${m.hs}</b>` : ''}</div>
         <div class="mc-team ${lost('a') ? 'lost' : ''}">${img(m.a.logo)}<span>${esc(m.a.short)}</span>${showScore ? `<b class="sc">${m.as}</b>` : ''}</div>
       </div>
-      <div class="probs">${['h', 'd', 'a'].map((k, i) => `<div class="${k === top ? 'top' : ''}"><small>${['1', 'N', '2'][i]}</small><b>${pctN(p[k])}</b></div>`).join('')}</div>
+      <div class="probs">${['h', 'd', 'a'].map((k, i) => `<div class="${k === top ? 'top' : ''}"><small>${esc([m.h.abbr || m.h.short.slice(0, 3), 'Nul', m.a.abbr || m.a.short.slice(0, 3)][i])}</small><b>${pctN(p[k])}</b></div>`).join('')}</div>
     </div>
     <div class="mc-bar"><i class="h" style="width:${p.h * 100}%"></i><i class="d" style="width:${p.d * 100}%"></i><i class="a" style="width:${p.a * 100}%"></i></div>
     <div class="mc-foot">
-      <span class="pick">${esc(mp.label)}${mp.odds ? ` <span class="odd">${odd(mp.odds)}</span>` : ''}</span>${conf(mp.stars)}
+      <span class="pick"><span class="pick-k">Prono</span> ${esc(mp.label)}${mp.odds ? ` <span class="odd">${odd(mp.odds)}</span>` : ''}</span>${conf(mp.stars)}
       ${vs.length ? `<span class="tag value">◆ ${vs.length} value</span>` : ''}
       ${moved ? `<span class="tag ${moved.diff < 0 ? 'down' : 'up'}" title="Évolution de la cote">${moved.diff < 0 ? '↘' : '↗'} ${odd(moved.from)} → ${odd(moved.to)}</span>` : ''}
       ${bigMatch(m) ? '<span class="tag big">🔥 Choc</span>' : ''}${absCount(m) ? `<span class="tag lose" title="Blessés / suspendus">🚑 ${absCount(m)}</span>` : ''}
@@ -233,7 +234,7 @@ function surePicksHtml(max = 8, days = 2) {
     .sort((a, b) => b.p - a.p).slice(0, max);
   if (!list.length) return '';
   const hist = Object.keys(SURE_TYPES).map((t) => SURE_TYPES[t] + ' ' + (CAL?.bins?.[t]?.['80'] ? Math.round(CAL.bins[t]['80'].real * 100) + ' %' : '?')).join(' · ');
-  let html = '<h2>✅ Les quasi-sûrs</h2><p class="note">Paris annoncés à 80 % ou plus (48 h). Sur les saisons passées, ils sont réellement passés : ' + hist + '. Cotes basses : à combiner plutôt qu\'à jouer seuls.</p><div class="card sure-list">';
+  let html = '<h2>✅ Les quasi-sûrs ' + info('quasi') + '</h2><p class="note">Paris annoncés à 80 % ou plus (48 h). Sur les saisons passées, ils sont réellement passés : ' + hist + '. Cotes basses : à combiner plutôt qu\'à jouer seuls.</p><div class="card sure-list">';
   for (const l of list) {
     html += '<div class="mini sure" data-id="' + l.m.id + '"><div class="t">' + fTime.format(new Date(l.m.date)) + '<br><span class="small muted">' + fWd.format(new Date(l.m.date)).replace('.', '') + '</span></div>'
       + '<div style="min-width:0"><div class="small muted" style="display:flex;gap:6px;align-items:center">' + img(l.m.h.logo, 'logo', 'width:14px;height:14px') + esc(l.match) + ' · ' + esc(comp(l.m.slug).short) + '</div><b>' + esc(l.label) + '</b> <span class="small muted">' + esc(calText(l.type)) + '</span></div>'
@@ -259,7 +260,7 @@ function dailyComboHtml() {
   const status = c.result ? (c.result.void ? '<span class="tag">Annulé (prolongation / report)</span>' : c.result.win ? '<span class="tag win">✓ Combiné gagné</span>' : '<span class="tag lose">✗ Combiné perdu</span>') : '';
   const when = c.day === todayKey() ? "aujourd'hui" : fDay.format(noon(c.day));
   const ids = c.legs.map((l) => l.mid + '|' + l.type + '|' + l.key).join(',');
-  return '<div class="card combo daily"><div class="row-between"><div><div class="eyebrow">🎯 Combiné du jour · ' + when + '</div><div class="combo-total">' + odd(c.odds) + '</div></div>'
+  return '<div class="card combo daily"><div class="row-between"><div><div class="eyebrow">🎯 Combiné du jour · ' + when + ' ' + info('combine') + '</div><div class="combo-total">' + odd(c.odds) + '</div></div>'
     + '<div class="ring" style="--p:' + Math.round(c.p * 100) + ';background:conic-gradient(var(--accent) calc(var(--p)*1%),var(--surface-3) 0)"><span style="background:var(--surface);color:var(--text)">' + pctN(c.p) + '%</span></div></div>'
     + '<div class="combo-legs">' + c.legs.map((l) => '<div class="leg" data-id="' + l.mid + '"><div style="min-width:0"><small>' + esc(l.match) + ' · ' + fTime.format(new Date(l.date)) + '</small><b>' + esc(l.label) + '</b> <span class="small muted">' + pct(l.p) + '</span></div>' + legState(l) + '</div>').join('') + '</div>'
     + '<div class="row-between">' + (status || '<span class="small muted">Le plus probable pour une cote ≈ 2. Figé au 1er coup d\'envoi, suivi dans Performance.</span>')
@@ -465,8 +466,9 @@ const MY_KEY = 'monCombine';
 let my = [];
 try { my = JSON.parse(localStorage.getItem(MY_KEY) || '[]'); } catch (e) { my = []; }
 const saveMy = () => { try { localStorage.setItem(MY_KEY, JSON.stringify(my)); } catch (e) {} updateMyCount(); };
-function updateMyCount() { const c = $('#myCount'); if (c) { c.hidden = !my.length; c.textContent = my.length; } }
+function updateMyCount() { const c = $('#myCount'); if (c) { c.hidden = !my.length; c.textContent = my.length; } updatePill(); }
 function addLeg(id, silent) {
+  buzz(10);
   if (my.find((l) => l.id === id)) { if (!silent) toast('Déjà dans ton combiné'); return; }
   const l = legById(id); if (!l) return;
   my.push({ id, odds: l.odds, est: l.est, label: l.label, match: l.match, date: l.date, mid: l.mid, type: l.type });
@@ -528,7 +530,7 @@ function renderCombis() {
     <h2>🎯 Combinés</h2>
     ${dailyComboHtml(true)}
     <div class="card pad gen">
-      <div class="eyebrow">Générateur de combiné</div>
+      <div class="eyebrow">Générateur de combiné ${info('generateur')}</div>
       <div class="filters" style="margin-top:10px"><div class="chips">${scopes.map(([k, l]) => `<button class="chip ${cState.scope === k ? 'active' : ''}" data-scope="${k}">${l}</button>`).join('')}</div></div>
       <div class="filters" style="margin:4px 0 12px">
         <div class="segmented">${[[1, "Aujourd'hui"], [2, '48 h'], [7, '7 jours']].map(([d, l]) => `<button class="${cState.period === d ? 'active' : ''}" data-period="${d}">${l}</button>`).join('')}</div>
@@ -817,22 +819,22 @@ function fichePronos(m) {
     <div style="display:flex;align-items:center;gap:10px"><div style="text-align:right">${conf(x.stars)}<div class="small" style="margin-top:3px"><b>${pct(x.p)}</b>${x.odds ? ' · ' + odd(x.odds) + (x.est ? '≈' : '') : ''}</div>${verdictTag(verdict(m, x))}</div>${addBtn(pickId(x))}</div></div>`;
   const legs = m.state === 'pre' ? allLegs(m, false, true) : [];
   return `
-    ${m.why ? `<div class="card pad section why"><div class="eyebrow">💬 Pourquoi ce prono</div><p>${esc(m.why)}</p>
+    ${m.why ? `<div class="card pad section why"><div class="eyebrow">💬 Pourquoi ce prono ${info('modele')}</div><p>${esc(m.why)}</p>
       ${m.trends?.length ? `<div class="trends">${m.trends.map((t) => `<div class="trend ${t.kind}"><span>${TREND_ICON[t.kind] || '📊'}</span>${esc(t.text)}</div>`).join('')}</div>` : ''}</div>` : ''}
-    <div class="card pad section"><div class="eyebrow">Nos pronos</div>${m.picks.map(pickLine).join('')}</div>
+    <div class="card pad section"><div class="eyebrow">Nos pronos ${info('confiance')}</div>${m.picks.map(pickLine).join('')}</div>
     ${legs.length ? `<div class="card pad section"><div class="row-between"><div class="eyebrow">Ajouter à mon combiné</div><span class="small muted">Tous les paris du match</span></div>
       <div class="leg-grid">${legs.map((l) => `<button class="leg-btn" data-add="${esc(l.id)}"><span>${esc(l.label)}</span><b>${odd(l.odds)}${l.est ? '≈' : ''}</b></button>`).join('')}</div></div>` : ''}
-    <div class="card pad section"><h3 style="margin-top:0">Résultat 1N2</h3>
+    <div class="card pad section"><h3 style="margin-top:0">Résultat 1N2 ${info('1n2')}</h3>
       <div class="mk">${mkRow(esc(m.h.short), p.p.h, o?.[0], arrow(0), 'var(--home)')}${mkRow('Match nul', p.p.d, o?.[1], arrow(1), 'var(--draw)')}${mkRow(esc(m.a.short), p.p.a, o?.[2], arrow(2), 'var(--away)')}</div>
       ${p.market ? `<p class="note">Modèle seul : ${pct(p.model.h)} / ${pct(p.model.d)} / ${pct(p.model.a)} · Bookmakers : ${pct(p.market.h)} / ${pct(p.market.d)} / ${pct(p.market.a)}</p><p class="note">Cotes affichées : <b>estimation France</b> (≈ Betclic, Winamax…), calculées d'après ${esc(m.odds.rawSrc || 'Bet365')}${m.odds.b365 ? ` (Bet365 : ${m.odds.b365.map(odd).join(' / ')})` : ''}. Les books français reversent moins (≈ 91 % des mises contre ≈ 94 %), d'où des cotes un peu plus basses. Pour un calcul exact, mets ta cote Betclic dans Mon combiné.</p>` : '<p class="note">Pas encore de cotes : probabilités du modèle seul.</p>'}
-      <h3>Double chance</h3>
+      <h3>Double chance ${info('dc')}</h3>
       <div class="mk">${mkRow(`${esc(m.h.short)} ou nul`, p.dc['1N'])}${mkRow(`Nul ou ${esc(m.a.short)}`, p.dc['N2'])}${mkRow('Pas de match nul', p.dc['12'])}</div>
     </div>
-    <div class="card pad section"><h3 style="margin-top:0">Buts dans le match</h3>
+    <div class="card pad section"><h3 style="margin-top:0">Buts dans le match ${info('buts')}</h3>
       <div class="mk"><div class="mk-row mk-head"><span>Ligne</span><span style="text-align:right">Plus</span><span style="text-align:right">Moins</span></div>
       ${['0.5', '1.5', '2.5', '3.5', '4.5'].map((L) => `<div class="mk-row"><div class="lab"><span>${L.replace('.', ',')} buts</span><div class="meter"><i style="width:${g[L] * 100}%"></i></div></div><span class="pct">${pct(g[L])}</span><span class="odd" style="font-weight:700">${pct(1 - g[L])}</span></div>`).join('')}</div>
       ${m.odds.ou ? `<p class="note">Cote France estimée : ligne ${String(m.odds.ou.line).replace('.', ',')} → plus ${odd(m.odds.ou.over)} / moins ${odd(m.odds.ou.under)}</p>` : ''}
-      <h3>Les deux équipes marquent</h3>
+      <h3>Les deux équipes marquent ${info('btts')}</h3>
       <div class="mk">${mkRow('Oui', p.btts)}${mkRow('Non', 1 - p.btts, null, '', 'var(--draw)')}</div>
       <h3>Buts de chaque équipe</h3>
       <div class="mk"><div class="mk-row mk-head"><span></span><span style="text-align:right">${esc(m.h.abbr || m.h.short)}</span><span style="text-align:right">${esc(m.a.abbr || m.a.short)}</span></div>
@@ -987,6 +989,7 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------- navigation ----------
 function render() {
+  updatePill();
   if (!M) return;
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === state.tab));
   ({ matchs: renderMatchs, semaine: renderSemaine, combis: renderCombis, joueurs: renderJoueurs, classements: renderClassements, perf: renderPerf })[state.tab]();
@@ -1013,4 +1016,111 @@ $('#themeBtn').onclick = () => {
 };
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
 
-load().catch((e) => { view.innerHTML = `<div class="card empty">Impossible de charger les données (${esc(e.message)}).</div>`; });
+
+// =================== Aide, explications, gestes ===================
+const buzz = (ms = 12) => { try { navigator.vibrate?.(ms); } catch (e) {} };
+
+// Lexique : chaque terme a une explication courte (bouton « ? » et page Aide)
+const GLOSSARY = {
+  '1n2': ['Résultat 1N2', "Qui gagne le match : 1 = l'équipe à domicile, N = match nul, 2 = l'équipe à l'extérieur. Les % sont les chances calculées par le site."],
+  dc: ['Double chance', "Tu gagnes sur 2 des 3 issues. Ex. « PSG ou nul » : gagné si PSG gagne OU fait match nul. Plus sûr, mais la cote est plus basse."],
+  buts: ['Plus / moins de buts', "On compte les buts des deux équipes. « Plus de 2,5 buts » = au moins 3 buts dans le match. « Moins de 2,5 » = 0, 1 ou 2 buts."],
+  btts: ['Les deux équipes marquent', "Gagné si chaque équipe marque au moins un but, quel que soit le score final."],
+  cote: ['La cote', "Ce que te rapporte 1 € misé si tu gagnes. Cote 2,00 → 10 € misés rapportent 20 € (dont 10 € de gain). Plus la cote est basse, plus le pari est probable."],
+  cotest: ['Cote ≈ (estimée)', "Quand le bookmaker ne donne pas la cote d'un pari, le site l'estime à partir de nos chances. Mets la vraie cote Betclic dans « Mon combiné » pour être exact."],
+  confiance: ['Barres de confiance', "De 1 à 5 barres : notre niveau de confiance dans le prono. Vert vif = très sûr, vert clair = sûr, jaune = moyen, orange = risqué, rouge = très risqué."],
+  combine: ['Combiné', "Plusieurs paris réunis : les cotes se multiplient, mais il faut que TOUS les paris passent. Le combiné du jour est le plus probable possible pour une cote d'environ 2."],
+  quasi: ['Les quasi-sûrs', "Les paris annoncés à 80 % de chances ou plus. Le % « passé » montre combien de fois ce genre de pari est vraiment passé sur les saisons précédentes."],
+  generateur: ['Générateur de combiné', "Choisis la cote que tu vises (curseur) et le nombre de paris (− / +) : le site cherche les paris les plus probables pour l'atteindre."],
+  modele: ['Comment le site calcule', "Le site mélange les cotes des bookmakers (90 %) et notre modèle (10 %) : force des équipes (Elo), buts, tirs cadrés, forme. Il se règle tout seul chaque lundi."],
+  forme: ['Forme V / N / D', "Les 5 derniers matchs de l'équipe : V = victoire, N = nul, D = défaite. Le plus récent est à gauche."],
+  elo: ['Note de force (Elo)', "Un score de niveau mis à jour après chaque match : on gagne des points en battant des équipes fortes. 1500 = moyen, 1900+ = très fort."],
+  favoris: ['Favoris', "Touche ☆ sur un match pour le suivre : il apparaît en haut de l'onglet Matchs. Les favoris restent sur ton téléphone."],
+};
+const info = (key) => '<button class="info" data-info="' + key + '" aria-label="Explication">?</button>';
+function showTip(key) {
+  const g = GLOSSARY[key]; if (!g) return;
+  let t = $('#tip');
+  if (!t) { t = document.createElement('div'); t.id = 'tip'; t.className = 'tip-wrap'; document.body.appendChild(t); t.addEventListener('click', (e) => { if (e.target === t || e.target.closest('.tip-close')) t.classList.remove('show'); }); }
+  t.innerHTML = '<div class="tip"><div class="tip-title">' + esc(g[0]) + '</div><p>' + esc(g[1]) + '</p><button class="btn-sm tip-close">Compris</button></div>';
+  t.classList.add('show'); buzz(8);
+}
+document.addEventListener('click', (e) => { const b = e.target.closest('[data-info]'); if (b) { e.stopPropagation(); e.preventDefault(); showTip(b.dataset.info); } }, true);
+
+// Page Aide : comment lire l'appli + lexique complet
+function showHelp() {
+  const body = $('#modalBody');
+  modalDraw = null; modalId = null;
+  body.innerHTML = '<div class="fiche-head help-head"><div class="comp">Aide</div><div style="font-size:22px;font-weight:900;margin-top:8px">Comment utiliser Layan Pronos</div></div>'
+    + '<div class="fiche-body">'
+    + '<div class="card pad section"><h3 style="margin-top:0">📱 L\'appli en 30 secondes</h3><ol class="help-steps">'
+    + '<li><b>Matchs</b> : choisis un jour (ou glisse l\'écran à gauche / à droite). Chaque carte montre les chances de chaque équipe et notre prono.</li>'
+    + '<li>Touche un match pour voir <b>la fiche</b> : pourquoi ce prono, stats, compos, buteurs, et le direct pendant le match.</li>'
+    + '<li><b>🎯 Combiné du jour</b> et <b>✅ Quasi-sûrs</b> en haut : nos paris les plus solides.</li>'
+    + '<li><b>Combinés</b> : fabrique ton combiné (curseur de cote, nombre de paris) et garde-le dans « Mon combiné ».</li>'
+    + '<li><b>Perf</b> : la réussite réelle du site, vérifiée match après match.</li>'
+    + '<li>Tire l\'écran vers le bas pour actualiser. Glisse une fiche vers le bas pour la fermer.</li></ol></div>'
+    + '<div class="card pad section"><h3 style="margin-top:0">📖 Lexique</h3>' + Object.values(GLOSSARY).map((g) => '<div class="gloss"><b>' + esc(g[0]) + '</b><p>' + esc(g[1]) + '</p></div>').join('') + '</div>'
+    + '<div class="card pad section"><h3 style="margin-top:0">⚠️ Jouer responsable</h3><p class="small">Aucun prono n\'est sûr à 100 %. Ne mise que ce que tu peux perdre. 18+ · Joueurs Info Service : 09 74 75 13 13.</p>'
+    + '<button class="btn-sm ghost" id="replayTour">Revoir la visite guidée</button></div></div>';
+  $('#replayTour').onclick = () => { closeModal(); setTimeout(startTour, 250); };
+  $('#modal').hidden = false; document.body.style.overflow = 'hidden'; $('.sheet').scrollTop = 0;
+  try { history.pushState({ fiche: 'aide' }, ''); } catch (e) {}
+}
+
+// Visite guidée au premier lancement
+const TOUR = [
+  ['👋', 'Bienvenue sur Layan Pronos', "Le site calcule les chances de chaque match de foot à partir des cotes des bookmakers et de nos statistiques. Tout se met à jour tout seul."],
+  ['📊', 'Lire un match', "Les 3 cases donnent les chances de victoire de chaque équipe et du nul. La case verte = l'issue la plus probable. Les petites barres = notre confiance : vert = sûr, rouge = risqué."],
+  ['🎯', 'Nos meilleurs paris', "En haut de l'écran : le combiné du jour (le plus probable pour une cote d'environ 2) et les quasi-sûrs (paris à 80 % ou plus). Touche ☆ pour mettre un match en favori."],
+  ['🧾', 'Ton combiné', "Ajoute des paris avec « + », remplace les cotes par celles de Betclic et vois tes gains possibles. Un « ? » à côté d'un mot = son explication. Bon match !"],
+];
+function startTour(i = 0) {
+  let t = $('#tour');
+  if (!t) { t = document.createElement('div'); t.id = 'tour'; t.className = 'tour-wrap'; document.body.appendChild(t); }
+  const [ico, title, text] = TOUR[i], last = i === TOUR.length - 1;
+  t.innerHTML = '<div class="tour"><div class="tour-ico">' + ico + '</div><h2>' + esc(title) + '</h2><p>' + esc(text) + '</p>'
+    + '<div class="tour-dots">' + TOUR.map((_, k) => '<i class="' + (k === i ? 'on' : '') + '"></i>').join('') + '</div>'
+    + '<div class="tour-btns"><button class="btn-sm ghost" id="tourSkip">' + (last ? 'Fermer' : 'Passer') + '</button><button class="btn-sm" id="tourNext">' + (last ? "C'est parti !" : 'Suivant') + '</button></div></div>';
+  t.classList.add('show');
+  const end = () => { t.classList.remove('show'); try { localStorage.setItem('tourVu', '1'); } catch (e) {} };
+  $('#tourSkip').onclick = end;
+  $('#tourNext').onclick = () => { buzz(8); if (last) end(); else startTour(i + 1); };
+}
+
+// Bulle flottante « Mon combiné » (accès rapide depuis tous les onglets)
+function updatePill() {
+  let p = $('#myPill');
+  if (!p) { p = document.createElement('button'); p.id = 'myPill'; p.className = 'my-pill'; document.body.appendChild(p); p.onclick = () => { buzz(); state.tab = 'combis'; render(); setTimeout(() => { const h = [...document.querySelectorAll('h2')].find((x) => /Mon combiné/.test(x.textContent)); h?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 60); }; }
+  if (!my.length || state.tab === 'combis' || !M) { p.hidden = true; return; }
+  const total = my.reduce((t, x) => t * (Number(x.odds) || 1), 1);
+  p.hidden = false; p.innerHTML = '🧾 <b>' + my.length + '</b> pari' + (my.length > 1 ? 's' : '') + ' · cote <b>' + odd(total) + '</b>';
+}
+
+// Gestes : glisser à gauche/droite = changer de jour (onglet Matchs) ; tirer vers le bas = actualiser
+(() => {
+  let x0 = null, y0 = 0, pull = 0;
+  const ind = document.createElement('div'); ind.className = 'ptr'; ind.innerHTML = '<span>↓</span>'; document.body.appendChild(ind);
+  view.addEventListener('touchstart', (e) => { if (e.touches.length !== 1) { x0 = null; return; } x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; pull = 0; }, { passive: true });
+  view.addEventListener('touchmove', (e) => {
+    if (x0 == null) return;
+    const dy = e.touches[0].clientY - y0;
+    if (window.scrollY <= 0 && dy > 0 && Math.abs(e.touches[0].clientX - x0) < 40) { pull = dy; ind.style.transform = 'translate(-50%,' + Math.min(70, dy / 2) + 'px)'; ind.style.opacity = Math.min(1, dy / 120); ind.classList.toggle('ready', dy > 120); }
+  }, { passive: true });
+  view.addEventListener('touchend', (e) => {
+    if (x0 == null) return;
+    const t = e.changedTouches[0], dx = t.clientX - x0, dy = t.clientY - y0;
+    ind.style.transform = ''; ind.style.opacity = 0; ind.classList.remove('ready');
+    if (pull > 120) { buzz(15); toast('Actualisation…'); load().then(() => toast('À jour ✓')).catch(() => toast('Pas de connexion')); x0 = null; return; }
+    // changement de jour : geste horizontal net, pas dans une zone qui défile déjà horizontalement
+    if (state.tab === 'matchs' && !state.q && Math.abs(dx) > 70 && Math.abs(dy) < 50 && !e.target.closest('.days, .chips, .table-wrap, input, select')) {
+      const days = [...new Set(M.matches.map((m) => dayKey(m.date)))].sort();
+      const i = days.indexOf(state.day), j = i + (dx < 0 ? 1 : -1);
+      if (j >= 0 && j < days.length) { state.day = days[j]; buzz(8); render(); window.scrollTo({ top: 0 }); view.classList.remove('slide-l', 'slide-r'); void view.offsetWidth; view.classList.add(dx < 0 ? 'slide-l' : 'slide-r'); }
+    }
+    x0 = null;
+  });
+})();
+
+load().then(() => { try { if (!localStorage.getItem('tourVu')) setTimeout(startTour, 600); } catch (e) {} }).catch((e) => { view.innerHTML = `<div class="card empty">Impossible de charger les données (${esc(e.message)}).</div>`; });
+$('#helpBtn').onclick = () => showHelp();
