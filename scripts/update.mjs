@@ -299,6 +299,7 @@ function dailyCombo(ms) {
       if (chosen.some((c) => c.mid === L[i].mid)) continue;
       // au plus 1 pari « moins de … buts » ou « X ou Y » (peu intéressants) par combiné
       if (boring(L[i]) && chosen.some(boring)) continue;
+      if (L[i].type === 'Buts' && chosen.some((c) => c.type === 'Buts')) continue; // 1 pari de buts maximum
       chosen.push(L[i]); rec(i + 1, chosen, o * L[i].odds, p * L[i].p); chosen.pop();
     }
   };

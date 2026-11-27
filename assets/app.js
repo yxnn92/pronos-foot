@@ -276,10 +276,12 @@ function surePicksHtml(max = 8, days = 2) {
 const SOLID_MIN = 1.2, SOLID_MAX = 1.8;
 const BANDS = [['all', 'Toutes', 1.2, 1.8], ['b1', '1,20 – 1,40', 1.2, 1.4], ['b2', '1,40 – 1,60', 1.4, 1.6], ['b3', '1,60 – 1,80', 1.6, 1.8]];
 let solidBand = 'all';
+// Types préférés : victoire d'équipe, « équipe ou nul », « les deux équipes marquent », joueurs. Les buts passent après.
+const SOLID_BONUS = (l) => (l.type === '1N2' && l.key !== 'd') ? 0.08 : l.type === 'DC' && l.key !== '12' ? 0.06 : (l.type === 'BTTS' && l.key === 'yes') ? 0.07 : PLAYER_TYPES[l.type] ? 0.07 : l.type === 'Buts' ? -0.06 : -1;
 function solidPicks(m, band = 'all') {
   const [, , lo, hi] = BANDS.find((b) => b[0] === band) || BANDS[0];
-  return allLegs(m).filter((l) => SURE_TYPES[l.type] && l.odds >= lo && l.odds <= hi && l.p >= 0.5)
-    .sort((a, b) => b.p - a.p).slice(0, 1); // le plus probable du match
+  return allLegs(m, true).filter((l) => SOLID_BONUS(l) > -1 && l.odds >= lo && l.odds <= hi && l.p >= 0.5)
+    .sort((a, b) => (b.p + SOLID_BONUS(b)) - (a.p + SOLID_BONUS(a))).slice(0, 1); // le meilleur pari du match
 }
 // Réussite passée pour ce niveau de chances (mesurée sur les saisons précédentes)
 function pastRate(type, p) {
@@ -290,8 +292,12 @@ function pastRate(type, p) {
 const starsOf = (p) => (p >= 0.8 ? 5 : p >= 0.72 ? 4 : p >= 0.64 ? 3 : p >= 0.58 ? 2 : 1);
 function solidPicksHtml(max = 10, days = 2) {
   const lim = Date.now() + days * 864e5;
-  const list = M.matches.filter((m) => isPre(m) && Date.parse(m.date) < lim).flatMap((m) => solidPicks(m, solidBand).map((l) => ({ ...l, m })))
-    .sort((a, b) => b.p - a.p).slice(0, max);
+  const all = M.matches.filter((m) => isPre(m) && Date.parse(m.date) < lim).flatMap((m) => solidPicks(m, solidBand).map((l) => ({ ...l, m })))
+    .sort((a, b) => b.p - a.p);
+  // variété : au plus 2 paris de buts, 3 paris joueurs, 4 de chaque autre type
+  const CAP = { Buts: 2, '1N2': 4, DC: 4, BTTS: 4 }, n = {};
+  const kind = (l) => (PLAYER_TYPES[l.type] ? 'joueur' : l.type);
+  const list = all.filter((l) => { const k = kind(l); n[k] = (n[k] || 0) + 1; return n[k] <= (CAP[k] ?? 3); }).slice(0, max);
   let html = '<h2>🎯 Paris à cote 1,20 – 1,80 ' + info('solides') + '</h2><p class="note">Les paris les plus probables des 48 prochaines heures, un par match. Choisis ta fourchette de cote :</p>'
     + '<div class="segmented band-seg">' + BANDS.map((b) => '<button class="' + (b[0] === solidBand ? 'active' : '') + '" data-band="' + b[0] + '">' + b[1] + '</button>').join('') + '</div>';
   if (!list.length) return html + '<div class="card empty">Aucun pari dans cette fourchette pour le moment.</div>';
@@ -468,7 +474,7 @@ function allLegs(m, withPlayers = false, all = false) {
   const out = [];
   for (const k of ['h', 'd', 'a']) out.push(legFor(m, '1N2', k));
   for (const k of ['1N', 'N2', '12']) out.push(legFor(m, 'DC', k));
-  for (const L of ['0.5', '1.5', '2.5', '3.5']) { out.push(legFor(m, 'Buts', 'o' + L)); out.push(legFor(m, 'Buts', 'u' + L)); }
+  for (const L of all ? ['0.5', '1.5', '2.5', '3.5'] : ['1.5', '2.5']) { out.push(legFor(m, 'Buts', 'o' + L)); out.push(legFor(m, 'Buts', 'u' + L)); }
   out.push(legFor(m, 'BTTS', 'yes'), legFor(m, 'BTTS', 'no'));
   const legs = out.filter((l) => l && l.p >= 0.15 && l.p <= 0.97 && l.odds >= 1.05 && (all || allowBoring || !isBoring(l)));
   return withPlayers ? legs.concat(playerLegs(m)) : legs;
@@ -497,7 +503,7 @@ function generate(pool, n, target, seed = 1, exclude = null, withPlayers = false
   const legScore = (l) => Math.log(l.p * l.odds) - (l.est ? 0.04 : 0);
   // Avec « joueurs » coché : au moins un pari joueur dans le combiné
   const noPlayer = (set) => withPlayers && !set.some((l) => PLAYER_TYPES[l.type]);
-  const score = (set) => { const lo = set.reduce((t, l) => t + Math.log(l.odds), 0); return set.reduce((t, l) => t + legScore(l), 0) - 2.5 * Math.abs(lo - Math.log(target)) - (noPlayer(set) ? 10 : 0); };
+  const score = (set) => { const lo = set.reduce((t, l) => t + Math.log(l.odds), 0); return set.reduce((t, l) => t + legScore(l), 0) - 2.5 * Math.abs(lo - Math.log(target)) - (noPlayer(set) ? 10 : 0) - 0.6 * Math.max(0, set.filter((l) => l.type === 'Buts').length - 1); };
   const per = Math.pow(target, 1 / n);
   // départ : pour chaque match, le pari le plus proche de la cote par pari visée
   let cands = mids.map((id) => byMatch.get(id).reduce((b, l) => (Math.abs(Math.log(l.odds / per)) - legScore(l) < Math.abs(Math.log(b.odds / per)) - legScore(b) ? l : b)));
